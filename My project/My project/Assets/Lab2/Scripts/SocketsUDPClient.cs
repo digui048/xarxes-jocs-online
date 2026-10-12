@@ -37,6 +37,7 @@ public class SocketsUDPClient : MonoBehaviour
     public int port = 9050;
     public string userName = "Player";
     public bool autoStart = true;
+    public bool showDebugView = true;   // the OnGUI text below. A scene with its own UI turns it off
 
     // =============================================================================================
     //  LOBBY STATE - only touched from the main thread
@@ -299,6 +300,8 @@ public class SocketsUDPClient : MonoBehaviour
 
     void OnGUI()
     {
+        if (!showDebugView) return;
+
         GUILayout.BeginArea(new Rect(10, 10, Screen.width - 20, Screen.height - 20));
         GUILayout.Label("UDP CLIENT   port " + port + "   name " + userName);
 

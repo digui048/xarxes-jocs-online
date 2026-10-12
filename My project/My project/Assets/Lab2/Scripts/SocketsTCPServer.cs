@@ -36,6 +36,7 @@ public class SocketsTCPServer : MonoBehaviour
     public int port = 9050;
     public string serverName = "MyServer";
     public bool autoStart = true;
+    public bool showDebugView = true;   // the OnGUI text below. A scene with its own UI turns it off
 
     // =============================================================================================
     //  NETWORK CODE - threads, framing and the Update() pump from session 2.1
@@ -55,8 +56,10 @@ public class SocketsTCPServer : MonoBehaviour
     readonly List<string> m_log = new List<string>();
     readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
+    volatile bool m_listening;
 
     public bool IsRunning { get { return m_running; } }
+    public bool IsListening { get { return m_running && m_listening; } }   // the socket is bound
     public int PlayerCount { get { lock (m_playersLock) return m_players.Count; } }
 
     void Start()
@@ -78,6 +81,7 @@ public class SocketsTCPServer : MonoBehaviour
     {
         if (!m_running) return;
         m_running = false;
+        m_listening = false;
 
         Socket[] clients;
         lock (m_clients) { clients = m_clients.ToArray(); m_clients.Clear(); }
@@ -115,11 +119,13 @@ public class SocketsTCPServer : MonoBehaviour
             Log("[SERVER] Could not start: " + e.SocketErrorCode +
                 (e.SocketErrorCode == SocketError.AddressAlreadyInUse
                     ? " (port " + port + " is still used by another instance, slide 34)" : ""));
+            m_running = false;   // nothing was started, so whoever asked can see it and try again
             return;
         }
 
         if (m_listener == null) { WarnTodo(1, "StartServer() returned null"); return; }
         Log("[SERVER] Listening on " + port);
+        m_listening = true;
 
         while (m_running)
         {
@@ -252,6 +258,8 @@ public class SocketsTCPServer : MonoBehaviour
     // In the deliverable you replace it with your own scenes and UI.
     void OnGUI()
     {
+        if (!showDebugView) return;
+
         GUILayout.BeginArea(new Rect(10, 10, Screen.width - 20, Screen.height - 20));
         GUILayout.Label("TCP SERVER   port " + port + "   name " + serverName);
 
@@ -380,6 +388,9 @@ public class SocketsTCPServer : MonoBehaviour
 
         Log("[SERVER] " + name + " left");
         BroadcastPlayers();
+
+        // Also as a chat line with no sender, so the players that stay can read who left.
+        Broadcast("CHAT:" + name + " left");
     }
 
     // Names in the order the clients connected. The dictionary alone does not keep any order.

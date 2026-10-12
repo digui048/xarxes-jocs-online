@@ -38,6 +38,7 @@ public class SocketsUDPServer : MonoBehaviour
     public int port = 9050;
     public string serverName = "MyServer";
     public bool autoStart = true;
+    public bool showDebugView = true;   // the OnGUI text below. A scene with its own UI turns it off
     public float clientTimeout = 5f;   // seconds of silence before a client is dropped
 
     // =============================================================================================
@@ -63,8 +64,10 @@ public class SocketsUDPServer : MonoBehaviour
     readonly List<string> m_log = new List<string>();
     readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
+    volatile bool m_listening;
 
     public bool IsRunning { get { return m_running; } }
+    public bool IsListening { get { return m_running && m_listening; } }   // the socket is bound
     public int ClientCount { get { lock (m_clients) return m_clients.Count; } }
 
     void Start()
@@ -85,6 +88,7 @@ public class SocketsUDPServer : MonoBehaviour
     {
         if (!m_running) return;
         m_running = false;
+        m_listening = false;
 
         // Closing the socket unblocks the thread waiting in ReceiveFrom() (slide 14).
         // No Shutdown() here: UDP has no connection to shut down.
@@ -119,11 +123,13 @@ public class SocketsUDPServer : MonoBehaviour
             Log("[SERVER] Could not start: " + e.SocketErrorCode +
                 (e.SocketErrorCode == SocketError.AddressAlreadyInUse
                     ? " (port " + port + " is still used by another instance, slide 34)" : ""));
+            m_running = false;   // nothing was started, so whoever asked can see it and try again
             return;
         }
 
         if (m_socket == null) { WarnTodo(1, "StartServer() returned null"); return; }
         Log("[SERVER] Listening on " + port);
+        m_listening = true;
 
         ReceiveLoop();
     }
@@ -213,6 +219,8 @@ public class SocketsUDPServer : MonoBehaviour
 
     void OnGUI()
     {
+        if (!showDebugView) return;
+
         GUILayout.BeginArea(new Rect(10, 10, Screen.width - 20, Screen.height - 20));
         GUILayout.Label("UDP SERVER   port " + port + "   clients " + ClientCount);
 
@@ -332,13 +340,16 @@ public class SocketsUDPServer : MonoBehaviour
 
         Log("[SERVER] " + client.name + " " + reason);
         BroadcastPlayers();
+
+        // Also as a chat line with no sender, so the players that stay can read who left.
+        Broadcast("CHAT:" + client.name + " " + reason);
     }
 
     // A closed window or a crash sends no LEAVE:
     void CheckTimeouts()
     {
         DateTime now = DateTime.UtcNow;
-        bool removed = false;
+        List<string> timedOut = null;
 
         lock (m_clients)
         {
@@ -347,13 +358,20 @@ public class SocketsUDPServer : MonoBehaviour
             {
                 if ((now - m_clients[i].lastSeen).TotalSeconds < clientTimeout) continue;
 
-                Log("[SERVER] " + m_clients[i].name + " timed out");
+                if (timedOut == null) timedOut = new List<string>();
+                timedOut.Add(m_clients[i].name);
                 m_clients.RemoveAt(i);
-                removed = true;
             }
         }
 
-        if (removed) BroadcastPlayers();
+        if (timedOut == null) return;
+
+        BroadcastPlayers();
+        foreach (string name in timedOut)
+        {
+            Log("[SERVER] " + name + " timed out");
+            Broadcast("CHAT:" + name + " timed out");
+        }
     }
 
     // Call it with m_clients locked.

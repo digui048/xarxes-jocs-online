@@ -38,6 +38,7 @@ public class SocketsTCPClient : MonoBehaviour
     public int port = 9050;
     public string userName = "Player";
     public bool autoStart = true;
+    public bool showDebugView = true;   // the OnGUI text below. A scene with its own UI turns it off
 
     // =============================================================================================
     //  LOBBY STATE - only touched from the main thread
@@ -316,6 +317,8 @@ public class SocketsTCPClient : MonoBehaviour
     // Temporary debug view. In the deliverable you replace it with your own scenes and UI.
     void OnGUI()
     {
+        if (!showDebugView) return;
+
         GUILayout.BeginArea(new Rect(10, 10, Screen.width - 20, Screen.height - 20));
         GUILayout.Label("TCP CLIENT   port " + port + "   name " + userName);
 
