@@ -129,6 +129,7 @@ GameObject:
   m_Component:
   - component: {fileID: 481956937}
   - component: {fileID: 481956936}
+  - component: {fileID: 481956938}
   m_Layer: 0
   m_Name: SocketsUDPServer
   m_TagString: Untagged
@@ -143,7 +144,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 481956935}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5daade4571b6e3b438bbfdf844ca8c18, type: 3}
   m_Name: 
@@ -166,6 +167,22 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &481956938
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 481956935}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ffebd0b0244dbe64bb4d779922bb5edf, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SocketsUDPServer
+  port: 9050
+  serverName: MyServer
+  autoStart: 1
+  clientTimeout: 5
 --- !u!1 &1345092334
 GameObject:
   m_ObjectHideFlags: 0

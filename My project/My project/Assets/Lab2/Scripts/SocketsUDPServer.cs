@@ -334,7 +334,7 @@ public class SocketsUDPServer : MonoBehaviour
         BroadcastPlayers();
     }
 
-    // A closed window or a crash sends no LEAVE:, so silence is the only way to notice it.
+    // A closed window or a crash sends no LEAVE:
     void CheckTimeouts()
     {
         DateTime now = DateTime.UtcNow;
