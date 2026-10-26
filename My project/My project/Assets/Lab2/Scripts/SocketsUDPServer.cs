@@ -24,6 +24,7 @@ public class SocketsUDPServer : MonoBehaviour
     {
         public EndPoint endPoint;
         public string name;
+        public PlayerDTO2 data;
         public DateTime lastSeen;
     }
 
@@ -246,7 +247,7 @@ public class SocketsUDPServer : MonoBehaviour
                 break;
             case MsgType.Player:
                 PlayerDTO2 dto;
-                if (Messages.ReadPlayer(reader, out dto)) OnPlayerData(dto);
+                if (Messages.ReadPlayer(reader, out dto)) OnJoin(dto, from, client, time);
                 else Log("[SERVER] Dropped a broken Player message from " + from);
                 break;
             default:
@@ -264,7 +265,6 @@ public class SocketsUDPServer : MonoBehaviour
 
         switch (type)
         {
-            case "JOIN": OnJoin(content, from, client, time); break;
             case "CHAT": if (client != null) OnChat(content, client); break;
             case "LEAVE": if (client != null) RemoveClient(client, "left"); break;
             case "PING": break;   // lastSeen already updated
@@ -272,23 +272,29 @@ public class SocketsUDPServer : MonoBehaviour
         }
     }
 
-    // Only JOIN creates a client, so a timed out player is not brought back by its pings
-    void OnJoin(string name, EndPoint from, ClientInfo client, DateTime time)
+    // The PlayerDTO2 is the join request, and only it creates a client, so a timed out player is
+    // not brought back by its pings. From a player already in the room it is an update
+    void OnJoin(PlayerDTO2 dto, EndPoint from, ClientInfo client, DateTime time)
     {
-        name = name.Trim().Replace(",", "");   // a comma would break the PLAYERS list
-        if (name.Length == 0) name = "Player";
+        dto.playerName = dto.playerName.Trim().Replace(",", "");   // a comma would break the PLAYERS list
+        if (dto.playerName.Length == 0) dto.playerName = "Player";
 
+        bool isNew = client == null;
         lock (m_clients)
         {
-            if (client == null)
+            if (isNew)
             {
                 client = new ClientInfo { endPoint = from, lastSeen = time };
                 m_clients.Add(client);
             }
-            client.name = name;   // a repeated JOIN only renames
+            client.name = dto.playerName;
+            client.data = dto;
         }
 
-        Log("[SERVER] " + name + " joined from " + from);
+        string pokemons = Messages.PokemonNames(dto);
+        if (isNew) Log("[SERVER] " + dto.playerName + " joined from " + from);
+        Log("[SERVER] Player data from " + dto.playerName + ": level " + dto.level +
+            ", Pokemon: " + (pokemons.Length > 0 ? pokemons : "none"));
         BroadcastPlayers();
     }
 
@@ -298,15 +304,6 @@ public class SocketsUDPServer : MonoBehaviour
 
         Log("[SERVER] " + client.name + ": " + message);
         Broadcast("CHAT:" + client.name + ": " + message);
-    }
-
-    void OnPlayerData(PlayerDTO2 dto)
-    {
-        List<string> pokemons = new List<string>();
-        foreach (Pokemon p in dto.ownedPokemons) pokemons.Add(p.name);
-
-        Log("[SERVER] Player data from " + dto.playerName + ": level " + dto.level +
-            ", Pokemon: " + (pokemons.Count > 0 ? string.Join(", ", pokemons) : "none"));
     }
 
     void RemoveClient(ClientInfo client, string reason)
@@ -365,13 +362,29 @@ public class SocketsUDPServer : MonoBehaviour
         }
     }
 
+    // Everybody's data goes before the list, so the clients have it when the list arrives
     void BroadcastPlayers()
     {
-        Broadcast("PLAYERS:" + string.Join(",", GetPlayerNames()));
+        List<PlayerDTO2> players = new List<PlayerDTO2>();
+        lock (m_clients)
+            foreach (ClientInfo c in m_clients) players.Add(c.data);
+
+        List<string> names = new List<string>();
+        foreach (PlayerDTO2 p in players)
+        {
+            BroadcastPacket(Messages.Player(p));
+            names.Add(p.playerName);
+        }
+        Broadcast("PLAYERS:" + string.Join(",", names));
+    }
+
+    void Broadcast(string text)
+    {
+        BroadcastPacket(Messages.Text(text));
     }
 
     // Copy inside the lock, send outside it
-    void Broadcast(string text)
+    void BroadcastPacket(byte[] packet)
     {
         EndPoint[] targets;
         lock (m_clients)
@@ -379,7 +392,6 @@ public class SocketsUDPServer : MonoBehaviour
             targets = new EndPoint[m_clients.Count];
             for (int i = 0; i < targets.Length; i++) targets[i] = m_clients[i].endPoint;
         }
-        byte[] packet = Messages.Text(text);
         foreach (EndPoint target in targets) SendPacket(packet, target);
     }
 }

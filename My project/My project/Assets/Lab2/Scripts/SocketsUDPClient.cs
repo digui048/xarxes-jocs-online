@@ -22,6 +22,7 @@ public class SocketsUDPClient : MonoBehaviour
 
     public List<string> CurrentPlayers { get; } = new List<string>();
     public List<string> ChatHistory { get; } = new List<string>();
+    public Dictionary<string, PlayerDTO2> PlayerData { get; } = new Dictionary<string, PlayerDTO2>();
 
     public event Action<List<string>> OnPlayersUpdated;
     public event Action<string> OnChatMessageReceived;
@@ -59,6 +60,7 @@ public class SocketsUDPClient : MonoBehaviour
 
         CurrentPlayers.Clear();
         ChatHistory.Clear();
+        PlayerData.Clear();
 
         StartThread(ClientThread);
     }
@@ -79,6 +81,7 @@ public class SocketsUDPClient : MonoBehaviour
 
         m_joined = false;
         CurrentPlayers.Clear();
+        PlayerData.Clear();
         Log("[CLIENT] Stopped");
     }
 
@@ -107,7 +110,7 @@ public class SocketsUDPClient : MonoBehaviour
         if (m_pingTimer < PingInterval) return;
         m_pingTimer = 0f;
 
-        // The JOIN can be lost too, so it is repeated until the first PLAYERS arrives
+        // The PlayerDTO2 can be lost too, so it is repeated until the first PLAYERS arrives
         if (m_joined) SendString("PING:");
         else SendJoin();
     }
@@ -211,6 +214,11 @@ public class SocketsUDPClient : MonoBehaviour
                 if (text != null) OnTextReceived(text);
                 else Log("[CLIENT] Dropped a broken Text message");
                 break;
+            case MsgType.Player:
+                PlayerDTO2 dto;
+                if (Messages.ReadPlayer(reader, out dto)) PlayerData[dto.playerName] = dto;
+                else Log("[CLIENT] Dropped a broken Player message");
+                break;
             default:
                 Log("[CLIENT] Unexpected " + msgType + " message, dropped");
                 break;
@@ -225,6 +233,11 @@ public class SocketsUDPClient : MonoBehaviour
 
             CurrentPlayers.Clear();
             if (names.Length > 0) CurrentPlayers.AddRange(names.Split(','));   // "" would give one empty name
+
+            // Forget the data of players that are not in the room any more
+            List<string> gone = new List<string>();
+            foreach (string name in PlayerData.Keys) if (!CurrentPlayers.Contains(name)) gone.Add(name);
+            foreach (string name in gone) PlayerData.Remove(name);
 
             m_joined = true;   // only players receive the list
 
@@ -341,7 +354,6 @@ public class SocketsUDPClient : MonoBehaviour
 
     void SendJoin()
     {
-        SendString("JOIN:" + userName);
         SendPacket(Messages.Player(MyData()));
     }
 

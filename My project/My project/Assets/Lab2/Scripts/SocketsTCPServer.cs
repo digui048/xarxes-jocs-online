@@ -21,7 +21,7 @@ public class SocketsTCPServer : MonoBehaviour
 
     Socket m_listener;
     readonly List<Socket> m_clients = new List<Socket>();
-    readonly Dictionary<Socket, string> m_players = new Dictionary<Socket, string>();
+    readonly Dictionary<Socket, PlayerDTO2> m_players = new Dictionary<Socket, PlayerDTO2>();
     readonly object m_playersLock = new object();
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<Packet> m_inbox = new ConcurrentQueue<Packet>();
@@ -283,7 +283,7 @@ public class SocketsTCPServer : MonoBehaviour
                 break;
             case MsgType.Player:
                 PlayerDTO2 dto;
-                if (Messages.ReadPlayer(reader, out dto)) OnPlayerData(dto);
+                if (Messages.ReadPlayer(reader, out dto)) OnJoin(dto, from);
                 else Log("[SERVER] Dropped a broken Player message");
                 break;
             default:
@@ -301,7 +301,6 @@ public class SocketsTCPServer : MonoBehaviour
 
         switch (type)
         {
-            case "JOIN": OnJoin(content, from); break;
             case "CHAT": OnChat(content, from); break;
             case "LEAVE": RemovePlayer(from); break;
             case "PING": break;   // only used by UDP
@@ -309,85 +308,102 @@ public class SocketsTCPServer : MonoBehaviour
         }
     }
 
-    void OnJoin(string name, Socket from)
+    // The PlayerDTO2 is the join request. From a player already in the room it is an update
+    void OnJoin(PlayerDTO2 dto, Socket from)
     {
-        name = name.Trim().Replace(",", "");   // a comma would break the PLAYERS list
-        if (name.Length == 0) name = "Player";
+        dto.playerName = dto.playerName.Trim().Replace(",", "");   // a comma would break the PLAYERS list
+        if (dto.playerName.Length == 0) dto.playerName = "Player";
 
-        // A second JOIN renames the player instead of adding it twice
-        lock (m_playersLock) m_players[from] = name;
+        bool isNew;
+        lock (m_playersLock)
+        {
+            isNew = !m_players.ContainsKey(from);
+            m_players[from] = dto;
+        }
 
-        Log("[SERVER] " + name + " joined");
+        string pokemons = Messages.PokemonNames(dto);
+        if (isNew) Log("[SERVER] " + dto.playerName + " joined");
+        Log("[SERVER] Player data from " + dto.playerName + ": level " + dto.level +
+            ", Pokemon: " + (pokemons.Length > 0 ? pokemons : "none"));
         BroadcastPlayers();
     }
 
     void OnChat(string message, Socket from)
     {
-        string name;
+        PlayerDTO2 player;
         bool isPlayer;
-        lock (m_playersLock) isPlayer = m_players.TryGetValue(from, out name);
+        lock (m_playersLock) isPlayer = m_players.TryGetValue(from, out player);
 
         if (!isPlayer || message.Trim().Length == 0) return;
 
-        Log("[SERVER] " + name + ": " + message);
-        Broadcast("CHAT:" + name + ": " + message);
-    }
-
-    void OnPlayerData(PlayerDTO2 dto)
-    {
-        List<string> pokemons = new List<string>();
-        foreach (Pokemon p in dto.ownedPokemons) pokemons.Add(p.name);
-
-        Log("[SERVER] Player data from " + dto.playerName + ": level " + dto.level +
-            ", Pokemon: " + (pokemons.Count > 0 ? string.Join(", ", pokemons) : "none"));
+        Log("[SERVER] " + player.playerName + ": " + message);
+        Broadcast("CHAT:" + player.playerName + ": " + message);
     }
 
     // LEAVE: and a closed socket both end here, the second call finds nothing
     void RemovePlayer(Socket socket)
     {
-        string name;
+        PlayerDTO2 player;
         bool wasPlayer;
         lock (m_playersLock)
         {
-            wasPlayer = m_players.TryGetValue(socket, out name);
+            wasPlayer = m_players.TryGetValue(socket, out player);
             if (wasPlayer) m_players.Remove(socket);
         }
         if (!wasPlayer) return;
 
-        Log("[SERVER] " + name + " left");
+        Log("[SERVER] " + player.playerName + " left");
         BroadcastPlayers();
-        Broadcast("CHAT:" + name + " left");
+        Broadcast("CHAT:" + player.playerName + " left");
     }
 
     // In connection order, the dictionary has none
-    public string[] GetPlayerNames()
+    List<PlayerDTO2> GetPlayers()
     {
         Socket[] clients;
         lock (m_clients) clients = m_clients.ToArray();
 
-        List<string> names = new List<string>();
+        List<PlayerDTO2> players = new List<PlayerDTO2>();
         lock (m_playersLock)
         {
             foreach (Socket c in clients)
             {
-                string name;
-                if (m_players.TryGetValue(c, out name)) names.Add(name);
+                PlayerDTO2 player;
+                if (m_players.TryGetValue(c, out player)) players.Add(player);
             }
         }
+        return players;
+    }
+
+    public string[] GetPlayerNames()
+    {
+        List<string> names = new List<string>();
+        foreach (PlayerDTO2 p in GetPlayers()) names.Add(p.playerName);
         return names.ToArray();
     }
 
+    // Everybody's data goes before the list, so the clients have it when the list arrives
     void BroadcastPlayers()
     {
-        Broadcast("PLAYERS:" + string.Join(",", GetPlayerNames()));
+        List<string> names = new List<string>();
+        foreach (PlayerDTO2 p in GetPlayers())
+        {
+            BroadcastPacket(Messages.Player(p));
+            names.Add(p.playerName);
+        }
+        Broadcast("PLAYERS:" + string.Join(",", names));
+    }
+
+    void Broadcast(string text)
+    {
+        BroadcastPacket(Messages.Text(text));
     }
 
     // Copy inside the lock, send outside it
-    void Broadcast(string text)
+    void BroadcastPacket(byte[] packet)
     {
         Socket[] targets;
         lock (m_clients) targets = m_clients.ToArray();
-        byte[] packet = Messages.Text(text);
         foreach (Socket c in targets) SendPacket(packet, c);
     }
 }

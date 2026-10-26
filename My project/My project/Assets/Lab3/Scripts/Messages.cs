@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 // Every packet: one MsgType byte, then the content
@@ -65,5 +66,12 @@ public static class Messages
 
         dto = new PlayerDTO2();
         return false;
+    }
+
+    public static string PokemonNames(PlayerDTO2 dto)
+    {
+        List<string> names = new List<string>();
+        foreach (Pokemon p in dto.ownedPokemons) names.Add(p.name);
+        return string.Join(", ", names);
     }
 }

@@ -21,6 +21,7 @@ public class SocketsTCPClient : MonoBehaviour
 
     public List<string> CurrentPlayers { get; } = new List<string>();
     public List<string> ChatHistory { get; } = new List<string>();
+    public Dictionary<string, PlayerDTO2> PlayerData { get; } = new Dictionary<string, PlayerDTO2>();
 
     public event Action<List<string>> OnPlayersUpdated;
     public event Action<string> OnChatMessageReceived;
@@ -54,6 +55,7 @@ public class SocketsTCPClient : MonoBehaviour
 
         CurrentPlayers.Clear();
         ChatHistory.Clear();
+        PlayerData.Clear();
 
         // An older thread still stuck in Connect() can tell it is not the current one
         int session = ++m_session;
@@ -75,6 +77,7 @@ public class SocketsTCPClient : MonoBehaviour
         foreach (Thread t in threads) if (t != Thread.CurrentThread) t.Join(500);
 
         CurrentPlayers.Clear();
+        PlayerData.Clear();
         Log("[CLIENT] Disconnected");
     }
 
@@ -116,7 +119,7 @@ public class SocketsTCPClient : MonoBehaviour
 
         if (socket == null) { WarnTodo(1, "StartClient() returned null"); return; }
 
-        // Disconnect() was called while connecting: drop the socket before it sends JOIN
+        // Disconnect() was called while connecting: drop the socket before it joins
         if (!m_running || session != m_session) { CloseSocket(socket); return; }
 
         m_connection = socket;
@@ -220,6 +223,11 @@ public class SocketsTCPClient : MonoBehaviour
                 if (text != null) OnTextReceived(text);
                 else Log("[CLIENT] Dropped a broken Text message");
                 break;
+            case MsgType.Player:
+                PlayerDTO2 dto;
+                if (Messages.ReadPlayer(reader, out dto)) PlayerData[dto.playerName] = dto;
+                else Log("[CLIENT] Dropped a broken Player message");
+                break;
             default:
                 Log("[CLIENT] Unexpected " + msgType + " message, dropped");
                 break;
@@ -234,6 +242,11 @@ public class SocketsTCPClient : MonoBehaviour
 
             CurrentPlayers.Clear();
             if (names.Length > 0) CurrentPlayers.AddRange(names.Split(','));   // "" would give one empty name
+
+            // Forget the data of players that are not in the room any more
+            List<string> gone = new List<string>();
+            foreach (string name in PlayerData.Keys) if (!CurrentPlayers.Contains(name)) gone.Add(name);
+            foreach (string name in gone) PlayerData.Remove(name);
 
             Log("[CLIENT] Players: " + names);
             if (OnPlayersUpdated != null) OnPlayersUpdated(CurrentPlayers);
@@ -346,7 +359,6 @@ public class SocketsTCPClient : MonoBehaviour
 
     void OnConnected()
     {
-        SendString("JOIN:" + userName);
         SendPacket(Messages.Player(MyData()));
     }
 

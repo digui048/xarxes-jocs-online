@@ -10,6 +10,7 @@ public class LobbyUI : MonoBehaviour
     const int DefaultPort = 9050;
     const float ServerStartTimeout = 2f;   // seconds
     const float ConnectTimeout = 5f;       // seconds
+    const int MaxPokemons = 6;
 
     [Header("Network")]
     public SocketsTCPServer tcpServer;
@@ -23,6 +24,8 @@ public class LobbyUI : MonoBehaviour
 
     [Header("Menu")]
     public TMP_Dropdown protocolDropdown;   // 0 = TCP, 1 = UDP
+    public TMP_InputField levelInput;
+    public TMP_InputField pokemonInput;
     public TMP_InputField hostNameInput;
     public TMP_InputField hostPortInput;
     public TMP_Text localIpText;
@@ -50,6 +53,7 @@ public class LobbyUI : MonoBehaviour
     bool ServerRunning { get { return m_useUdp ? udpServer.IsRunning : tcpServer.IsRunning; } }
     bool ServerListening { get { return m_useUdp ? udpServer.IsListening : tcpServer.IsListening; } }
     List<string> ChatHistory { get { return m_useUdp ? udpClient.ChatHistory : tcpClient.ChatHistory; } }
+    Dictionary<string, PlayerDTO2> PlayerData { get { return m_useUdp ? udpClient.PlayerData : tcpClient.PlayerData; } }
 
     void Awake()
     {
@@ -89,7 +93,7 @@ public class LobbyUI : MonoBehaviour
     {
         if (m_state == State.Connecting)
         {
-            // Without this timeout UDP would keep sending JOIN forever
+            // Without this timeout UDP would keep trying to join forever
             m_connectTimer += Time.unscaledDeltaTime;
 
             if (!ClientRunning) BackToMenu("Could not connect to the server");
@@ -115,6 +119,10 @@ public class LobbyUI : MonoBehaviour
         int port;
         if (!ReadPort(hostPortInput, out port)) return;
 
+        int level;
+        List<Pokemon> team;
+        if (!ReadTeam(out level, out team)) return;
+
         m_useUdp = protocolDropdown.value == 1;
         m_hosting = true;
 
@@ -123,7 +131,7 @@ public class LobbyUI : MonoBehaviour
 
         m_state = State.StartingServer;
         SetStatus("Starting the server on port " + port + "...");
-        StartCoroutine(JoinOwnServer(ReadName(hostNameInput, "Host"), port));
+        StartCoroutine(JoinOwnServer(ReadName(hostNameInput, "Host"), port, level, team));
     }
 
     public void JoinGame()
@@ -132,6 +140,10 @@ public class LobbyUI : MonoBehaviour
 
         int port;
         if (!ReadPort(serverPortInput, out port)) return;
+
+        int level;
+        List<Pokemon> team;
+        if (!ReadTeam(out level, out team)) return;
 
         string ip = serverIpInput.text.Trim();
         if (ip.Length == 0 || ip == "localhost") ip = "127.0.0.1";
@@ -145,7 +157,7 @@ public class LobbyUI : MonoBehaviour
 
         m_useUdp = protocolDropdown.value == 1;
         m_hosting = false;
-        StartClient(ip, port, ReadName(playerNameInput, "Player"));
+        StartClient(ip, port, ReadName(playerNameInput, "Player"), level, team);
     }
 
     public void SendChat()
@@ -165,8 +177,8 @@ public class LobbyUI : MonoBehaviour
         BackToMenu("");
     }
 
-    // The server binds on its own thread, wait for it before sending JOIN
-    IEnumerator JoinOwnServer(string playerName, int port)
+    // The server binds on its own thread, wait for it before joining
+    IEnumerator JoinOwnServer(string playerName, int port, int level, List<Pokemon> team)
     {
         float waited = 0f;
         while (ServerRunning && !ServerListening && waited < ServerStartTimeout)
@@ -181,16 +193,18 @@ public class LobbyUI : MonoBehaviour
             yield break;
         }
 
-        StartClient("127.0.0.1", port, playerName);
+        StartClient("127.0.0.1", port, playerName, level, team);
     }
 
-    void StartClient(string ip, int port, string playerName)
+    void StartClient(string ip, int port, string playerName, int level, List<Pokemon> team)
     {
         if (m_useUdp)
         {
             udpClient.serverIp = ip;
             udpClient.port = port;
             udpClient.userName = playerName;
+            udpClient.level = level;
+            udpClient.pokemons = team;
             udpClient.StartNetwork();
         }
         else
@@ -198,6 +212,8 @@ public class LobbyUI : MonoBehaviour
             tcpClient.serverIp = ip;
             tcpClient.port = port;
             tcpClient.userName = playerName;
+            tcpClient.level = level;
+            tcpClient.pokemons = team;
             tcpClient.StartNetwork();
         }
 
@@ -227,11 +243,26 @@ public class LobbyUI : MonoBehaviour
 
     void OnPlayersUpdated(List<string> players)
     {
-        // The first list means the server accepted the JOIN
+        // The first list means the server accepted the join
         if (m_state == State.Connecting && players.Count > 0) ShowWaitingRoom();
 
         if (m_state == State.InRoom)
-            playerListText.text = "Players (" + players.Count + ")\n\n" + string.Join("\n", players);
+            playerListText.text = FormatPlayers(players);
+    }
+
+    // Name and level on one line, the team below
+    string FormatPlayers(List<string> players)
+    {
+        List<string> entries = new List<string>();
+        foreach (string name in players)
+        {
+            PlayerDTO2 dto;
+            if (!PlayerData.TryGetValue(name, out dto)) { entries.Add(name); continue; }
+
+            string pokemons = Messages.PokemonNames(dto);
+            entries.Add(name + " - level " + dto.level + "\n" + (pokemons.Length > 0 ? pokemons : "no Pokemon"));
+        }
+        return "Players (" + players.Count + ")\n\n" + string.Join("\n\n", entries);
     }
 
     void OnChatMessageReceived(string line)
@@ -286,6 +317,21 @@ public class LobbyUI : MonoBehaviour
         if (int.TryParse(text, out port) && port > 0 && port <= 65535) return true;
 
         SetStatus("The port has to be a number between 1 and 65535");
+        return false;
+    }
+
+    bool ReadTeam(out int level, out List<Pokemon> team)
+    {
+        team = new List<Pokemon>();
+        foreach (string name in pokemonInput.text.Split(','))
+            if (name.Trim().Length > 0 && team.Count < MaxPokemons) team.Add(new Pokemon { name = name.Trim() });
+
+        string text = levelInput.text.Trim();
+        if (text.Length == 0) { level = 1; return true; }
+
+        if (int.TryParse(text, out level) && level >= 1 && level <= 100) return true;
+
+        SetStatus("The level has to be a number between 1 and 100");
         return false;
     }
 
