@@ -6,7 +6,7 @@
 //  Session 2.2: same lobby as the TCP server (player list and chat), over UDP.
 //  Scene: S_UDP_Server. The client is in S_UDP_Client.
 //
-//  MESSAGES (plain text, TYPE:content)
+//  MESSAGES (TYPE:content. Since Lab 3 each one travels as a Text message, see Lab3 Messages.cs)
 //    JOIN:Anna          client -> server   register the player
 //    PLAYERS:Anna,Marc  server -> all      full player list, sent on every join and every leave
 //    CHAT:hello         client -> server   a chat line
@@ -27,9 +27,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using UnityEngine;
 
@@ -148,9 +148,10 @@ public class SocketsUDPServer : MonoBehaviour
         catch (ObjectDisposedException) { }
     }
 
+    // Lab 3: the text goes out as a Text message, with its type byte in front (Messages.cs).
     public void SendString(string text, EndPoint to)
     {
-        SendPacket(Encoding.UTF8.GetBytes(text), to);
+        SendPacket(Messages.Text(text), to);
     }
 
     void ReceiveLoop()
@@ -278,15 +279,10 @@ public class SocketsUDPServer : MonoBehaviour
     //  LOBBY - everything below runs in Update(), on the main thread
     // =============================================================================================
 
+    // Lab 3: the first byte says what the packet is (slide 18). The lobby messages are Text, and
+    // OnTextReceived() handles them exactly as in Lab 2.
     void OnPacketReceived(byte[] data, EndPoint from, DateTime time)
     {
-        string text = Encoding.UTF8.GetString(data);
-
-        // Only the first ':' separates type and content, a chat line can have more of them.
-        int separator = text.IndexOf(':');
-        string type = separator < 0 ? text : text.Substring(0, separator);
-        string content = separator < 0 ? "" : text.Substring(separator + 1);
-
         // Any message proves that the client is alive, not only PING.
         ClientInfo client;
         lock (m_clients)
@@ -294,6 +290,34 @@ public class SocketsUDPServer : MonoBehaviour
             client = FindClient(from);
             if (client != null) client.lastSeen = time;
         }
+
+        MsgType msgType;
+        BinaryReader reader;
+        if (!Messages.Open(data, out msgType, out reader))
+        {
+            Log("[SERVER] Dropped a packet of an unknown type from " + from + " (" + data.Length + " bytes)");
+            return;
+        }
+
+        switch (msgType)
+        {
+            case MsgType.Text:
+                string text = Messages.ReadText(reader);
+                if (text != null) OnTextReceived(text, from, client, time);
+                else Log("[SERVER] Dropped a broken Text message from " + from);
+                break;
+            default:
+                Log("[SERVER] No code for " + msgType + " messages yet, dropped");
+                break;
+        }
+    }
+
+    void OnTextReceived(string text, EndPoint from, ClientInfo client, DateTime time)
+    {
+        // Only the first ':' separates type and content, a chat line can have more of them.
+        int separator = text.IndexOf(':');
+        string type = separator < 0 ? text : text.Substring(0, separator);
+        string content = separator < 0 ? "" : text.Substring(separator + 1);
 
         switch (type)
         {
@@ -406,6 +430,7 @@ public class SocketsUDPServer : MonoBehaviour
             targets = new EndPoint[m_clients.Count];
             for (int i = 0; i < targets.Length; i++) targets[i] = m_clients[i].endPoint;
         }
-        foreach (EndPoint target in targets) SendString(text, target);
+        byte[] packet = Messages.Text(text);   // built once, the same bytes go to everybody
+        foreach (EndPoint target in targets) SendPacket(packet, target);
     }
 }

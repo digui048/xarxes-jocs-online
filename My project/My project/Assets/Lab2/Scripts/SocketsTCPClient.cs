@@ -6,7 +6,7 @@
 //  Session 2.2: the client joins the lobby of the server, keeps the player list and the chat.
 //  Scene: S_TCP_Client. The server is in S_TCP_Server.
 //
-//  MESSAGES (plain text, TYPE:content)
+//  MESSAGES (TYPE:content. Since Lab 3 each one travels as a Text message, see Lab3 Messages.cs)
 //    JOIN:Anna          we send it right after connecting
 //    PLAYERS:Anna,Marc  the server sends it on every join and every leave -> CurrentPlayers
 //    CHAT:hello         we send it from SendChatMessage()
@@ -26,9 +26,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using UnityEngine;
 
@@ -189,9 +189,10 @@ public class SocketsTCPClient : MonoBehaviour
         catch (ObjectDisposedException) { }
     }
 
+    // Lab 3: the text goes out as a Text message, with its type byte in front (Messages.cs).
     public void SendString(string text)
     {
-        SendPacket(Encoding.UTF8.GetBytes(text));
+        SendPacket(Messages.Text(text));
     }
 
     // The server adds our name and sends the line back to everybody, us included, so nothing is
@@ -242,11 +243,34 @@ public class SocketsTCPClient : MonoBehaviour
         return true;
     }
 
-    // Runs in Update(), so the lists and the events are safe here.
+    // Lab 3: the first byte says what the packet is (slide 18). The lobby messages are Text, and
+    // OnTextReceived() handles them exactly as in Lab 2.
     void OnPacketReceived(byte[] data)
     {
-        string text = Encoding.UTF8.GetString(data);
+        MsgType msgType;
+        BinaryReader reader;
+        if (!Messages.Open(data, out msgType, out reader))
+        {
+            Log("[CLIENT] Dropped a packet of an unknown type (" + data.Length + " bytes)");
+            return;
+        }
 
+        switch (msgType)
+        {
+            case MsgType.Text:
+                string text = Messages.ReadText(reader);
+                if (text != null) OnTextReceived(text);
+                else Log("[CLIENT] Dropped a broken Text message");
+                break;
+            default:
+                Log("[CLIENT] No code for " + msgType + " messages yet, dropped");
+                break;
+        }
+    }
+
+    // Runs in Update(), so the lists and the events are safe here.
+    void OnTextReceived(string text)
+    {
         if (text.StartsWith("PLAYERS:", StringComparison.Ordinal))
         {
             string names = text.Substring("PLAYERS:".Length);
