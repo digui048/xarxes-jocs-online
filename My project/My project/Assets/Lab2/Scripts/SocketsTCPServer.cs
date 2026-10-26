@@ -1,27 +1,3 @@
-// =================================================================================================
-//  Lab 2 - Sockets: TCP SERVER
-//  XJO - Xarxes per a Jocs Online
-// =================================================================================================
-//
-//  Session 2.2: the server is now a lobby with a player list and a chat.
-//  Scene: S_TCP_Server. The client is in S_TCP_Client.
-//
-//  MESSAGES (TYPE:content. Since Lab 3 each one travels as a Text message, see Lab3 Messages.cs)
-//    JOIN:Anna          client -> server   register the player
-//    PLAYERS:Anna,Marc  server -> all      full player list, sent on every join and every leave
-//    CHAT:hello         client -> server   a chat line
-//    CHAT:Anna: hello   server -> all      the same line with the name of who wrote it
-//    LEAVE:             client -> server   the player leaves the room
-//
-//  HOW TO RUN IT
-//    Build the project with S_TCP_Server, or press Play with this scene open.
-//    Then run the client on the other side. Both on the same PC: IP 127.0.0.1.
-//
-//  The threads, the framing ([4-byte length][payload]) and the Update() pump come from session 2.1.
-//  The lobby code is at the bottom of the file.
-//
-// =================================================================================================
-
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -36,20 +12,16 @@ public class SocketsTCPServer : MonoBehaviour
     public int port = 9050;
     public string serverName = "MyServer";
     public bool autoStart = true;
-    public bool showDebugView = true;   // the OnGUI text below. A scene with its own UI turns it off
-
-    // =============================================================================================
-    //  NETWORK CODE - threads, framing and the Update() pump from session 2.1
-    // =============================================================================================
+    public bool showDebugView = true;
 
     const int MaxPacketSize = 64 * 1024;
 
-    // disconnected = true is not a real packet: it tells Update() that this socket is gone
+    // disconnected: the socket closed and there is no data
     struct Packet { public byte[] data; public Socket from; public bool disconnected; }
 
-    Socket m_listener;                                        // only accepts connections
-    readonly List<Socket> m_clients = new List<Socket>();     // one socket per connected client
-    readonly Dictionary<Socket, string> m_players = new Dictionary<Socket, string>();   // who sent JOIN
+    Socket m_listener;
+    readonly List<Socket> m_clients = new List<Socket>();
+    readonly Dictionary<Socket, string> m_players = new Dictionary<Socket, string>();
     readonly object m_playersLock = new object();
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<Packet> m_inbox = new ConcurrentQueue<Packet>();
@@ -59,12 +31,12 @@ public class SocketsTCPServer : MonoBehaviour
     volatile bool m_listening;
 
     public bool IsRunning { get { return m_running; } }
-    public bool IsListening { get { return m_running && m_listening; } }   // the socket is bound
+    public bool IsListening { get { return m_running && m_listening; } }
     public int PlayerCount { get { lock (m_playersLock) return m_players.Count; } }
 
     void Start()
     {
-        Application.runInBackground = true;   // or the window without focus is paused
+        Application.runInBackground = true;   // keep running without focus
         ParseCommandLine();
         if (autoStart) StartNetwork();
     }
@@ -76,7 +48,7 @@ public class SocketsTCPServer : MonoBehaviour
         StartThread(ServerThread);
     }
 
-    // Closing the sockets is what unblocks the threads waiting in Accept() or Receive() (slide 14).
+    // Closing the sockets unblocks the threads waiting in Accept() and Receive()
     public void Disconnect()
     {
         if (!m_running) return;
@@ -100,7 +72,6 @@ public class SocketsTCPServer : MonoBehaviour
 
     void OnDestroy() { Disconnect(); }
 
-    // Main thread: the only safe place to touch the Unity API.
     void Update()
     {
         Packet packet;
@@ -113,13 +84,13 @@ public class SocketsTCPServer : MonoBehaviour
 
     void ServerThread()
     {
-        try { m_listener = StartServer(); }                                          // TODO 1
+        try { m_listener = StartServer(); }
         catch (SocketException e)
         {
             Log("[SERVER] Could not start: " + e.SocketErrorCode +
                 (e.SocketErrorCode == SocketError.AddressAlreadyInUse
-                    ? " (port " + port + " is still used by another instance, slide 34)" : ""));
-            m_running = false;   // nothing was started, so whoever asked can see it and try again
+                    ? " (port " + port + " is still used by another instance)" : ""));
+            m_running = false;
             return;
         }
 
@@ -130,7 +101,7 @@ public class SocketsTCPServer : MonoBehaviour
         while (m_running)
         {
             Socket client;
-            try { client = AcceptClient(); }                                         // TODO 2
+            try { client = AcceptClient(); }
             catch (SocketException) { break; }
             catch (ObjectDisposedException) { break; }
 
@@ -144,7 +115,6 @@ public class SocketsTCPServer : MonoBehaviour
         }
     }
 
-    // One of these per connected client: in TCP every client has its own socket (slide 8).
     void ClientThread(Socket client)
     {
         ReceiveLoop(client);
@@ -152,12 +122,10 @@ public class SocketsTCPServer : MonoBehaviour
         Log("[SERVER] Client disconnected");
         CloseSocket(client);
 
-        // The player list is handled in Update(), so the disconnect goes through the queue too.
-        // It ends up behind the packets this client sent before closing, so the order is kept.
+        // Queued so the player is removed on the main thread, after its last packets
         m_inbox.Enqueue(new Packet { from = client, disconnected = true });
     }
 
-    // Sends one packet to one client. Lab 3 will call it with serialized data instead of text.
     public void SendPacket(byte[] payload, Socket to)
     {
         if (to == null || payload == null) return;
@@ -168,14 +136,13 @@ public class SocketsTCPServer : MonoBehaviour
 
         try
         {
-            int sent = SendRaw(to, framed);                                          // TODO 3
+            int sent = SendRaw(to, framed);
             if (sent < 0) WarnTodo(3, "SendRaw() is not implemented yet");
         }
         catch (SocketException e) { Log("[SERVER] Send failed: " + e.SocketErrorCode); }
         catch (ObjectDisposedException) { }
     }
 
-    // Lab 3: the text goes out as a Text message, with its type byte in front (Messages.cs).
     public void SendString(string text, Socket to)
     {
         SendPacket(Messages.Text(text), to);
@@ -198,19 +165,19 @@ public class SocketsTCPServer : MonoBehaviour
         }
     }
 
-    // One Receive() can return less than you asked for, so we insist until we have it all.
+    // Receive() can return fewer bytes than asked for
     bool ReadExactly(Socket socket, byte[] buffer, int count)
     {
         int total = 0;
         while (total < count)
         {
             int read;
-            try { read = ReceiveRaw(socket, buffer, total, count - total); }         // TODO 4
+            try { read = ReceiveRaw(socket, buffer, total, count - total); }
             catch (SocketException e) { Log("[SERVER] Connection lost: " + e.SocketErrorCode); return false; }
             catch (ObjectDisposedException) { return false; }
 
             if (read < 0) { WarnTodo(4, "ReceiveRaw() is not implemented yet"); return false; }
-            if (read == 0) return false;   // 0 bytes = the client closed the connection (slide 8)
+            if (read == 0) return false;   // connection closed
             total += read;
         }
         return true;
@@ -255,8 +222,6 @@ public class SocketsTCPServer : MonoBehaviour
         }
     }
 
-    // Temporary debug view, so you can also see what happens in a build.
-    // In the deliverable you replace it with your own scenes and UI.
     void OnGUI()
     {
         if (!showDebugView) return;
@@ -276,62 +241,29 @@ public class SocketsTCPServer : MonoBehaviour
         GUILayout.EndArea();
     }
 
-    // =============================================================================================
-    //  TODO AREA - this is the only part you have to write
-    // =============================================================================================
-
-    // --------------------------------------------------------------------------------- TODO 1 ---
-    //  Goal: leave the server socket ready to receive connections on 'port', and return it.
-    //  Three steps: create a TCP socket, give it a local address, and put it in listening mode.
-    //  Look it up: slide 8 (TCP sequence), slide 6 (who binds and why).
-    //      Socket      https://learn.microsoft.com/dotnet/api/system.net.sockets.socket
-    //      IPEndPoint  https://learn.microsoft.com/dotnet/api/system.net.ipendpoint
-    //  Think: which IP does a server listen on if you want a classmate's PC to reach it? (slide 5)
-    //  Console when it works:  [SERVER] Listening on 9050
     Socket StartServer()
     {
         Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         socket.Bind(new IPEndPoint(IPAddress.Any, port));   // Any: reachable from other machines
-        socket.Listen(10);                                  // 10 = pending connections queue
+        socket.Listen(10);                                  // pending connections queue
         return socket;
     }
 
-    // --------------------------------------------------------------------------------- TODO 2 ---
-    //  Goal: wait for one client and return the socket that talks to it.
-    //  Careful: it is NOT the listener. Check the sequence diagram (slide 8) to see which socket
-    //  the data travels through.
-    //  It blocks until somebody connects, which is fine: we are on a network thread.
-    //  Console when it works:  [SERVER] Client connected: 127.0.0.1:54xxx
     Socket AcceptClient()
     {
-        return m_listener.Accept();   // replace with the socket of the accepted client
+        return m_listener.Accept();
     }
 
-    // --------------------------------------------------------------------------------- TODO 3 ---
-    //  Goal: send 'data' through 'socket' and return how many bytes were sent.
-    //  It is already framed, so send the whole array. No address needed here, and slide 10 says why.
-    //  Look it up: Socket.Send in the docs. It returns the number of bytes sent.
     int SendRaw(Socket socket, byte[] data)
     {
-        return socket.Send(data);   // replace with the number of bytes sent
+        return socket.Send(data);
     }
 
-    // --------------------------------------------------------------------------------- TODO 4 ---
-    //  Goal: read from 'socket' into 'buffer' at position 'offset', at most 'count' bytes, and
-    //  return how many bytes you actually read.
-    //  Look it up: Socket.Receive, the overload that takes an offset and a size.
-    //  Return the real number: the given code already knows that 0 means "connection closed".
     int ReceiveRaw(Socket socket, byte[] buffer, int offset, int count)
     {
-        return socket.Receive(buffer, offset, count, SocketFlags.None);   // replace with the number of bytes read
+        return socket.Receive(buffer, offset, count, SocketFlags.None);
     }
 
-    // =============================================================================================
-    //  LOBBY - everything below runs in Update(), on the main thread
-    // =============================================================================================
-
-    // Lab 3: the first byte says what the packet is (slide 18). The lobby messages are Text, and
-    // OnTextReceived() handles them exactly as in Lab 2.
     void OnPacketReceived(byte[] data, Socket from)
     {
         MsgType msgType;
@@ -349,15 +281,20 @@ public class SocketsTCPServer : MonoBehaviour
                 if (text != null) OnTextReceived(text, from);
                 else Log("[SERVER] Dropped a broken Text message");
                 break;
+            case MsgType.Player:
+                PlayerDTO2 dto;
+                if (Messages.ReadPlayer(reader, out dto)) OnPlayerData(dto);
+                else Log("[SERVER] Dropped a broken Player message");
+                break;
             default:
-                Log("[SERVER] No code for " + msgType + " messages yet, dropped");
+                Log("[SERVER] Unexpected " + msgType + " message, dropped");
                 break;
         }
     }
 
     void OnTextReceived(string text, Socket from)
     {
-        // Only the first ':' separates type and content, a chat line can have more of them.
+        // A chat line can contain ':' too, so split on the first one
         int separator = text.IndexOf(':');
         string type = separator < 0 ? text : text.Substring(0, separator);
         string content = separator < 0 ? "" : text.Substring(separator + 1);
@@ -367,7 +304,7 @@ public class SocketsTCPServer : MonoBehaviour
             case "JOIN": OnJoin(content, from); break;
             case "CHAT": OnChat(content, from); break;
             case "LEAVE": RemovePlayer(from); break;
-            case "PING": break;   // only needed in UDP, here Receive already tells us who is gone
+            case "PING": break;   // only used by UDP
             default: Log("[SERVER] Unknown message: " + text); break;
         }
     }
@@ -377,8 +314,7 @@ public class SocketsTCPServer : MonoBehaviour
         name = name.Trim().Replace(",", "");   // a comma would break the PLAYERS list
         if (name.Length == 0) name = "Player";
 
-        // Indexer and not Add(): a second JOIN from the same socket renames the player instead of
-        // adding it twice.
+        // A second JOIN renames the player instead of adding it twice
         lock (m_playersLock) m_players[from] = name;
 
         Log("[SERVER] " + name + " joined");
@@ -391,14 +327,22 @@ public class SocketsTCPServer : MonoBehaviour
         bool isPlayer;
         lock (m_playersLock) isPlayer = m_players.TryGetValue(from, out name);
 
-        if (!isPlayer || message.Trim().Length == 0) return;   // not in the room, or nothing to say
+        if (!isPlayer || message.Trim().Length == 0) return;
 
         Log("[SERVER] " + name + ": " + message);
         Broadcast("CHAT:" + name + ": " + message);
     }
 
-    // Used for LEAVE: and for a closed connection. A client that sends LEAVE: and then closes gets
-    // here twice, but the second time it is not in the dictionary and nothing is sent.
+    void OnPlayerData(PlayerDTO2 dto)
+    {
+        List<string> pokemons = new List<string>();
+        foreach (Pokemon p in dto.ownedPokemons) pokemons.Add(p.name);
+
+        Log("[SERVER] Player data from " + dto.playerName + ": level " + dto.level +
+            ", Pokemon: " + (pokemons.Count > 0 ? string.Join(", ", pokemons) : "none"));
+    }
+
+    // LEAVE: and a closed socket both end here, the second call finds nothing
     void RemovePlayer(Socket socket)
     {
         string name;
@@ -412,12 +356,10 @@ public class SocketsTCPServer : MonoBehaviour
 
         Log("[SERVER] " + name + " left");
         BroadcastPlayers();
-
-        // Also as a chat line with no sender, so the players that stay can read who left.
         Broadcast("CHAT:" + name + " left");
     }
 
-    // Names in the order the clients connected. The dictionary alone does not keep any order.
+    // In connection order, the dictionary has none
     public string[] GetPlayerNames()
     {
         Socket[] clients;
@@ -440,13 +382,12 @@ public class SocketsTCPServer : MonoBehaviour
         Broadcast("PLAYERS:" + string.Join(",", GetPlayerNames()));
     }
 
-    // The accept thread and the client threads change m_clients while we are here, so we copy the
-    // list inside the lock and send outside it.
+    // Copy inside the lock, send outside it
     void Broadcast(string text)
     {
         Socket[] targets;
         lock (m_clients) targets = m_clients.ToArray();
-        byte[] packet = Messages.Text(text);   // built once, the same bytes go to everybody
+        byte[] packet = Messages.Text(text);
         foreach (Socket c in targets) SendPacket(packet, c);
     }
 }

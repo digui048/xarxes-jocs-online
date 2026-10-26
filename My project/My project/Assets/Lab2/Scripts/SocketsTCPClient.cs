@@ -1,28 +1,3 @@
-// =================================================================================================
-//  Lab 2 - Sockets: TCP CLIENT
-//  XJO - Xarxes per a Jocs Online
-// =================================================================================================
-//
-//  Session 2.2: the client joins the lobby of the server, keeps the player list and the chat.
-//  Scene: S_TCP_Client. The server is in S_TCP_Server.
-//
-//  MESSAGES (TYPE:content. Since Lab 3 each one travels as a Text message, see Lab3 Messages.cs)
-//    JOIN:Anna          we send it right after connecting
-//    PLAYERS:Anna,Marc  the server sends it on every join and every leave -> CurrentPlayers
-//    CHAT:hello         we send it from SendChatMessage()
-//    CHAT:Anna: hello   the server sends it to everybody -> ChatHistory
-//    LEAVE:             we send it in Disconnect(), before closing the socket
-//
-//  HOW TO RUN IT
-//    Start the server first (build or Editor), then this one. Same PC: Server Ip 127.0.0.1.
-//    With a classmate: their IP, given by "ipconfig" on their machine.
-//
-//  FOR THE UI
-//    CurrentPlayers and ChatHistory hold the state, OnPlayersUpdated and OnChatMessageReceived
-//    tell when it changes. Both events are raised from Update(), so the handlers can touch the UI.
-//
-// =================================================================================================
-
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -38,11 +13,9 @@ public class SocketsTCPClient : MonoBehaviour
     public int port = 9050;
     public string userName = "Player";
     public bool autoStart = true;
-    public bool showDebugView = true;   // the OnGUI text below. A scene with its own UI turns it off
-
-    // =============================================================================================
-    //  LOBBY STATE - only touched from the main thread
-    // =============================================================================================
+    public bool showDebugView = true;
+    public int level = 1;
+    public List<Pokemon> pokemons = new List<Pokemon> { new Pokemon { name = "Pikachu" }, new Pokemon { name = "Charmander" } };
 
     const int MaxChatLines = 100;
 
@@ -52,27 +25,23 @@ public class SocketsTCPClient : MonoBehaviour
     public event Action<List<string>> OnPlayersUpdated;
     public event Action<string> OnChatMessageReceived;
 
-    // =============================================================================================
-    //  NETWORK CODE - thread, framing and the Update() pump from session 2.1
-    // =============================================================================================
-
     const int MaxPacketSize = 64 * 1024;
 
-    Socket m_connection;                                      // the connection to the server
+    Socket m_connection;
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<byte[]> m_inbox = new ConcurrentQueue<byte[]>();
     readonly List<string> m_log = new List<string>();
     readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
-    volatile bool m_sessionOver;                              // the network thread ended by itself
-    volatile int m_session;                                   // one number per StartNetwork()
-    string m_chatInput = "";                                  // text field of the debug view
+    volatile bool m_sessionOver;
+    volatile int m_session;
+    string m_chatInput = "";
 
     public bool IsRunning { get { return m_running; } }
 
     void Start()
     {
-        Application.runInBackground = true;   // or the window without focus is paused
+        Application.runInBackground = true;   // keep running without focus
         ParseCommandLine();
         if (autoStart) StartNetwork();
     }
@@ -86,19 +55,17 @@ public class SocketsTCPClient : MonoBehaviour
         CurrentPlayers.Clear();
         ChatHistory.Clear();
 
-        // The thread remembers its number. A thread from an older attempt that is still stuck in
-        // Connect() can then see that it is not the current one any more.
+        // An older thread still stuck in Connect() can tell it is not the current one
         int session = ++m_session;
         StartThread(delegate { ClientThread(session); });
     }
 
-    // Closing the socket is what unblocks the thread waiting in Receive() (slide 14).
+    // Closing the socket unblocks the thread waiting in Receive()
     public void Disconnect()
     {
         if (!m_running) return;
         m_running = false;
 
-        // Say goodbye before closing. If the server already closed there is nobody to tell.
         if (!m_sessionOver && m_connection != null && m_connection.Connected) SendString("LEAVE:");
 
         CloseSocket(m_connection); m_connection = null;
@@ -113,15 +80,13 @@ public class SocketsTCPClient : MonoBehaviour
 
     void OnDestroy() { Disconnect(); }
 
-    // Main thread: the only safe place to touch the Unity API.
     void Update()
     {
         byte[] data;
         while (m_inbox.TryDequeue(out data))
             OnPacketReceived(data);
 
-        // The server closed the connection, or we never got one. It was noticed on the network
-        // thread, but the player list and the events belong here.
+        // The network thread ended by itself: the server is gone or the connection failed
         if (m_sessionOver)
         {
             Disconnect();
@@ -133,12 +98,12 @@ public class SocketsTCPClient : MonoBehaviour
     void ClientThread(int session)
     {
         Socket socket;
-        try { socket = StartClient(); }                                              // TODO 1
+        try { socket = StartClient(); }
         catch (SocketException e)
         {
             Log("[CLIENT] Could not connect: " + e.SocketErrorCode +
                 (e.SocketErrorCode == SocketError.ConnectionRefused
-                    ? " (nobody is listening on " + serverIp + ":" + port + ", slide 34)" : ""));
+                    ? " (nobody is listening on " + serverIp + ":" + port + ")" : ""));
             EndSession(session);
             return;
         }
@@ -151,22 +116,20 @@ public class SocketsTCPClient : MonoBehaviour
 
         if (socket == null) { WarnTodo(1, "StartClient() returned null"); return; }
 
-        // Connect() can take a long time. If Disconnect() was called meanwhile nobody wants this
-        // socket any more, and sending JOIN would leave a ghost player in the server.
+        // Disconnect() was called while connecting: drop the socket before it sends JOIN
         if (!m_running || session != m_session) { CloseSocket(socket); return; }
 
         m_connection = socket;
         Log("[CLIENT] Connected to " + serverIp + ":" + port);
 
-        OnConnected();                                                               // TODO 2
+        OnConnected();
         ReceiveLoop(socket);
         Log("[CLIENT] Connection closed");
 
         EndSession(session);
     }
 
-    // The network thread calls it when it ends and nobody asked for it with Disconnect().
-    // It only raises the flag: the cleanup is done by Update(), on the main thread.
+    // Only raises the flag, Update() does the cleanup on the main thread
     void EndSession(int session)
     {
         if (m_running && session == m_session) m_sessionOver = true;
@@ -182,21 +145,19 @@ public class SocketsTCPClient : MonoBehaviour
 
         try
         {
-            int sent = SendRaw(m_connection, framed);                                // TODO 3
+            int sent = SendRaw(m_connection, framed);
             if (sent < 0) WarnTodo(3, "SendRaw() is not implemented yet");
         }
         catch (SocketException e) { Log("[CLIENT] Send failed: " + e.SocketErrorCode); }
         catch (ObjectDisposedException) { }
     }
 
-    // Lab 3: the text goes out as a Text message, with its type byte in front (Messages.cs).
     public void SendString(string text)
     {
         SendPacket(Messages.Text(text));
     }
 
-    // The server adds our name and sends the line back to everybody, us included, so nothing is
-    // added to ChatHistory here.
+    // The server sends the line back to everybody, so it is not added to ChatHistory here
     public void SendChatMessage(string msg)
     {
         if (string.IsNullOrWhiteSpace(msg)) return;
@@ -226,25 +187,22 @@ public class SocketsTCPClient : MonoBehaviour
         while (total < count)
         {
             int read;
-            try { read = ReceiveRaw(socket, buffer, total, count - total); }         // TODO 4
+            try { read = ReceiveRaw(socket, buffer, total, count - total); }
             catch (SocketException e)
             {
-                // Our own Disconnect() also lands here, because closing the socket is what
-                // unblocks Receive(). That one is not an error.
+                // Our own Disconnect() also ends up here, that one is not an error
                 if (m_running) Log("[CLIENT] Connection lost: " + e.SocketErrorCode);
                 return false;
             }
             catch (ObjectDisposedException) { return false; }
 
             if (read < 0) { WarnTodo(4, "ReceiveRaw() is not implemented yet"); return false; }
-            if (read == 0) return false;   // 0 bytes = the server closed the connection (slide 8)
+            if (read == 0) return false;   // connection closed
             total += read;
         }
         return true;
     }
 
-    // Lab 3: the first byte says what the packet is (slide 18). The lobby messages are Text, and
-    // OnTextReceived() handles them exactly as in Lab 2.
     void OnPacketReceived(byte[] data)
     {
         MsgType msgType;
@@ -263,19 +221,17 @@ public class SocketsTCPClient : MonoBehaviour
                 else Log("[CLIENT] Dropped a broken Text message");
                 break;
             default:
-                Log("[CLIENT] No code for " + msgType + " messages yet, dropped");
+                Log("[CLIENT] Unexpected " + msgType + " message, dropped");
                 break;
         }
     }
 
-    // Runs in Update(), so the lists and the events are safe here.
     void OnTextReceived(string text)
     {
         if (text.StartsWith("PLAYERS:", StringComparison.Ordinal))
         {
             string names = text.Substring("PLAYERS:".Length);
 
-            // The server always sends the whole list, so we replace ours instead of merging.
             CurrentPlayers.Clear();
             if (names.Length > 0) CurrentPlayers.AddRange(names.Split(','));   // "" would give one empty name
 
@@ -284,7 +240,7 @@ public class SocketsTCPClient : MonoBehaviour
         }
         else if (text.StartsWith("CHAT:", StringComparison.Ordinal))
         {
-            string line = text.Substring("CHAT:".Length);   // already "name: text", the server builds it
+            string line = text.Substring("CHAT:".Length);
 
             ChatHistory.Add(line);
             if (ChatHistory.Count > MaxChatLines) ChatHistory.RemoveAt(0);
@@ -338,7 +294,6 @@ public class SocketsTCPClient : MonoBehaviour
         }
     }
 
-    // Temporary debug view. In the deliverable you replace it with your own scenes and UI.
     void OnGUI()
     {
         if (!showDebugView) return;
@@ -346,8 +301,7 @@ public class SocketsTCPClient : MonoBehaviour
         GUILayout.BeginArea(new Rect(10, 10, Screen.width - 20, Screen.height - 20));
         GUILayout.Label("TCP CLIENT   port " + port + "   name " + userName);
 
-        // Read once: the buttons change m_running, and the layout must not change in the middle
-        // of one OnGUI call.
+        // Read once so the layout does not change in the middle of OnGUI
         bool running = m_running;
 
         GUILayout.BeginHorizontal();
@@ -383,49 +337,37 @@ public class SocketsTCPClient : MonoBehaviour
         GUILayout.EndArea();
     }
 
-    // =============================================================================================
-    //  TODO AREA - this is the only part you have to write
-    // =============================================================================================
-
-    // --------------------------------------------------------------------------------- TODO 1 ---
-    //  Goal: create the client socket, connect it to the server, and return it.
-    //  You have 'serverIp' and 'port'. The client does not bind: the system gives it a free port
-    //  (slide 6). It names the server only once, and the socket remembers it (slide 10).
-    //  Look it up: slide 8, and Socket / Socket.Connect / IPEndPoint in the docs.
-    //  If the server is not running you get ConnectionRefused. That is the expected error.
-    //  Console when it works:  [CLIENT] Connected to 127.0.0.1:9050
     Socket StartClient()
     {
         Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        socket.Connect(new IPEndPoint(IPAddress.Parse(serverIp), port));   // named once, remembered
-        return socket;   // replace with the socket you connected
+        socket.Connect(new IPEndPoint(IPAddress.Parse(serverIp), port));
+        return socket;
     }
 
-    // --------------------------------------------------------------------------------- TODO 2 ---
-    //  Introduce yourself: the first message after connecting is JOIN: with our name.
-    //  Runs on the network thread, so do not touch the Unity API here.
-    //  Console when it works: the server prints  [SERVER] Player joined
     void OnConnected()
     {
         SendString("JOIN:" + userName);
+        SendPacket(Messages.Player(MyData()));
     }
 
-    // --------------------------------------------------------------------------------- TODO 3 ---
-    //  Goal: send 'data' through 'socket' and return how many bytes were sent.
-    //  It is already framed, so send the whole array. Same call the server uses.
-    //  Look it up: Socket.Send in the docs.
+    PlayerDTO2 MyData()
+    {
+        PlayerDTO2 dto = new PlayerDTO2();
+        dto.playerName = userName;
+        dto.level = level;
+        dto.ownedPokemons = new List<Pokemon>();
+        foreach (Pokemon p in pokemons)
+            if (p != null && !string.IsNullOrEmpty(p.name)) dto.ownedPokemons.Add(p);
+        return dto;
+    }
+
     int SendRaw(Socket socket, byte[] data)
     {
-        return socket.Send(data);   // replace with the number of bytes sent
+        return socket.Send(data);
     }
 
-    // --------------------------------------------------------------------------------- TODO 4 ---
-    //  Goal: read from 'socket' into 'buffer' at position 'offset', at most 'count' bytes, and
-    //  return how many bytes you actually read.
-    //  Look it up: Socket.Receive, the overload that takes an offset and a size.
-    //  Console when it works:  [CLIENT] Received: MyServer
     int ReceiveRaw(Socket socket, byte[] buffer, int offset, int count)
     {
-        return socket.Receive(buffer, offset, count, SocketFlags.None); ;   // replace with the number of bytes read
+        return socket.Receive(buffer, offset, count, SocketFlags.None); ;
     }
 }

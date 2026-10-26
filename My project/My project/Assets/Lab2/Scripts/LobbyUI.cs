@@ -1,22 +1,3 @@
-// =================================================================================================
-//  Lab 2 - Sockets: LOBBY UI
-//  XJO - Xarxes per a Jocs Online
-// =================================================================================================
-//
-//  Drives the MainMenu scene. It has two screens:
-//
-//    - The menu, with the Host and Join panels and the TCP / UDP selector.
-//    - The waiting room, with the player list and the chat.
-//
-//  There is no networking here. This script only starts and stops the four Sockets components and
-//  shows what the client that is in use receives. Their events are raised from Update(), so the
-//  handlers below can touch the UI directly.
-//
-//  Host: starts the server and then a local client on 127.0.0.1, so the host is one more player.
-//  Join: starts only the client.
-//
-// =================================================================================================
-
 using System.Collections;
 using System.Collections.Generic;
 using System.Net;
@@ -27,8 +8,8 @@ using UnityEngine;
 public class LobbyUI : MonoBehaviour
 {
     const int DefaultPort = 9050;
-    const float ServerStartTimeout = 2f;   // seconds waiting for the server socket to be bound
-    const float ConnectTimeout = 5f;       // seconds waiting for the first player list
+    const float ServerStartTimeout = 2f;   // seconds
+    const float ConnectTimeout = 5f;       // seconds
 
     [Header("Network")]
     public SocketsTCPServer tcpServer;
@@ -41,7 +22,7 @@ public class LobbyUI : MonoBehaviour
     public GameObject waitingRoomPanel;
 
     [Header("Menu")]
-    public TMP_Dropdown protocolDropdown;   // option 0 is TCP, option 1 is UDP
+    public TMP_Dropdown protocolDropdown;   // 0 = TCP, 1 = UDP
     public TMP_InputField hostNameInput;
     public TMP_InputField hostPortInput;
     public TMP_Text localIpText;
@@ -72,17 +53,14 @@ public class LobbyUI : MonoBehaviour
 
     void Awake()
     {
-        // Only one client runs at a time, so both can share the same handlers.
         tcpClient.OnPlayersUpdated += OnPlayersUpdated;
         tcpClient.OnChatMessageReceived += OnChatMessageReceived;
         udpClient.OnPlayersUpdated += OnPlayersUpdated;
         udpClient.OnChatMessageReceived += OnChatMessageReceived;
 
-        // Enter in the chat box does the same as the Send button.
         chatInput.onSubmit.AddListener(OnChatSubmitted);
 
-        // Names and chat lines are written by other people. Without this, somebody could send
-        // TextMeshPro tags like <size=300> and break the screen of everybody.
+        // Other players write these texts, so TMP tags must not be interpreted
         playerListText.richText = false;
         chatHistoryText.richText = false;
     }
@@ -111,8 +89,7 @@ public class LobbyUI : MonoBehaviour
     {
         if (m_state == State.Connecting)
         {
-            // TCP gives up by itself when nobody listens. UDP has no connection, so it would keep
-            // sending JOIN forever: the timeout is for that case.
+            // Without this timeout UDP would keep sending JOIN forever
             m_connectTimer += Time.unscaledDeltaTime;
 
             if (!ClientRunning) BackToMenu("Could not connect to the server");
@@ -120,7 +97,7 @@ public class LobbyUI : MonoBehaviour
         }
         else if (m_state == State.InRoom && !ClientRunning)
         {
-            // The client stopped and it was not the Leave button, so the server is gone.
+            // Stopped without the Leave button: the server is gone
             BackToMenu("The connection with the server was lost");
         }
 
@@ -130,10 +107,6 @@ public class LobbyUI : MonoBehaviour
             chatInput.ActivateInputField();
         }
     }
-
-    // =============================================================================================
-    //  BUTTONS - linked from the scene
-    // =============================================================================================
 
     public void HostGame()
     {
@@ -181,9 +154,8 @@ public class LobbyUI : MonoBehaviour
 
         string text = chatInput.text;
         chatInput.text = "";
-        m_focusChat = true;   // the box loses the focus when a line is sent, give it back
+        m_focusChat = true;   // the input field loses focus on submit
 
-        // Nothing is added to the chat here. The server sends the line back to everybody, us too.
         if (m_useUdp) udpClient.SendChatMessage(text);
         else tcpClient.SendChatMessage(text);
     }
@@ -193,12 +165,7 @@ public class LobbyUI : MonoBehaviour
         BackToMenu("");
     }
 
-    // =============================================================================================
-    //  CONNECTING
-    // =============================================================================================
-
-    // The server binds its socket on a network thread. The local client has to wait for it, or
-    // its JOIN would arrive before anybody is listening.
+    // The server binds on its own thread, wait for it before sending JOIN
     IEnumerator JoinOwnServer(string playerName, int port)
     {
         float waited = 0f;
@@ -246,7 +213,7 @@ public class LobbyUI : MonoBehaviour
     {
         StopAllCoroutines();
 
-        // Client first, so its LEAVE: still finds the server alive.
+        // Client first, so its LEAVE: still reaches the server
         tcpClient.Disconnect();
         udpClient.Disconnect();
 
@@ -258,13 +225,9 @@ public class LobbyUI : MonoBehaviour
         m_hosting = false;
     }
 
-    // =============================================================================================
-    //  CLIENT EVENTS
-    // =============================================================================================
-
     void OnPlayersUpdated(List<string> players)
     {
-        // The first list is the answer to our JOIN: the server has us, so we are in the room.
+        // The first list means the server accepted the JOIN
         if (m_state == State.Connecting && players.Count > 0) ShowWaitingRoom();
 
         if (m_state == State.InRoom)
@@ -275,7 +238,6 @@ public class LobbyUI : MonoBehaviour
     {
         if (m_state != State.InRoom) return;
 
-        // The client already keeps the last 100 lines, so we just show its list again.
         chatHistoryText.text = string.Join("\n", ChatHistory);
     }
 
@@ -283,10 +245,6 @@ public class LobbyUI : MonoBehaviour
     {
         SendChat();
     }
-
-    // =============================================================================================
-    //  SCREENS
-    // =============================================================================================
 
     void ShowMenu(string status)
     {
@@ -320,10 +278,6 @@ public class LobbyUI : MonoBehaviour
         statusText.text = text;
     }
 
-    // =============================================================================================
-    //  HELPERS
-    // =============================================================================================
-
     bool ReadPort(TMP_InputField input, out int port)
     {
         string text = input.text.Trim();
@@ -341,9 +295,7 @@ public class LobbyUI : MonoBehaviour
         return name.Length > 0 ? name : fallback;
     }
 
-    // The address the other players have to type to reach this PC.
-    // Connect() on a UDP socket sends nothing: it only makes the system choose the network
-    // interface it would use, and that interface has the address we want to show.
+    // Connect() on a UDP socket sends nothing, it only picks the interface the system would use
     static string GetLocalIp()
     {
         try
@@ -356,7 +308,7 @@ public class LobbyUI : MonoBehaviour
         }
         catch (SocketException)
         {
-            return "127.0.0.1";   // no network at all
+            return "127.0.0.1";   // no network
         }
     }
 }

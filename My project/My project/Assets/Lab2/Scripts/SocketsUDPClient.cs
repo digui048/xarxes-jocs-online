@@ -1,27 +1,3 @@
-// =================================================================================================
-//  Lab 2 - Sockets: UDP CLIENT
-//  XJO - Xarxes per a Jocs Online
-// =================================================================================================
-//
-//  Session 2.2: same lobby client as the TCP one (player list and chat), over UDP.
-//  Scene: S_UDP_Client. The server is in S_UDP_Server. Start the server first.
-//
-//  MESSAGES (TYPE:content. Since Lab 3 each one travels as a Text message, see Lab3 Messages.cs)
-//    JOIN:Anna          our first message, it is the handshake
-//    PLAYERS:Anna,Marc  the server sends it on every join and every leave -> CurrentPlayers
-//    CHAT:hello         we send it from SendChatMessage()
-//    CHAT:Anna: hello   the server sends it to everybody -> ChatHistory
-//    LEAVE:             we send it in Disconnect()
-//    PING:              we send it every second, or the server drops us after 5 s of silence
-//
-//  What changes from TCP (slides 7, 9 and 24):
-//      - There is no Connect(). Your first message IS the handshake.
-//      - You do not bind either: the first SendTo() makes the system pick a local port for you.
-//      - You must write the server address on every message you send.
-//      - The server cannot see that we closed, so we have to keep telling it we are alive.
-//
-// =================================================================================================
-
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -37,14 +13,12 @@ public class SocketsUDPClient : MonoBehaviour
     public int port = 9050;
     public string userName = "Player";
     public bool autoStart = true;
-    public bool showDebugView = true;   // the OnGUI text below. A scene with its own UI turns it off
-
-    // =============================================================================================
-    //  LOBBY STATE - only touched from the main thread
-    // =============================================================================================
+    public bool showDebugView = true;
+    public int level = 1;
+    public List<Pokemon> pokemons = new List<Pokemon> { new Pokemon { name = "Pikachu" }, new Pokemon { name = "Charmander" } };
 
     const int MaxChatLines = 100;
-    const float PingInterval = 1f;   // seconds. The server timeout is 5, so a few can get lost
+    const float PingInterval = 1f;   // seconds
 
     public List<string> CurrentPlayers { get; } = new List<string>();
     public List<string> ChatHistory { get; } = new List<string>();
@@ -52,23 +26,19 @@ public class SocketsUDPClient : MonoBehaviour
     public event Action<List<string>> OnPlayersUpdated;
     public event Action<string> OnChatMessageReceived;
 
-    // =============================================================================================
-    //  NETWORK CODE - thread, receive loop and the Update() pump from session 2.1
-    // =============================================================================================
-
     const int MaxPacketSize = 64 * 1024;
 
-    Socket m_socket;                                          // the only socket
-    EndPoint m_serverEndPoint;                                // where your messages go
+    Socket m_socket;
+    EndPoint m_serverEndPoint;
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<byte[]> m_inbox = new ConcurrentQueue<byte[]>();
     readonly List<string> m_log = new List<string>();
     readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
-    volatile bool m_sessionOver;                              // the network thread ended by itself
-    bool m_joined;                                            // true once the server answered with PLAYERS
+    volatile bool m_sessionOver;
+    bool m_joined;
     float m_pingTimer;
-    string m_chatInput = "";                                  // text field of the debug view
+    string m_chatInput = "";
 
     public bool IsRunning { get { return m_running; } }
 
@@ -98,8 +68,7 @@ public class SocketsUDPClient : MonoBehaviour
         if (!m_running) return;
         m_running = false;
 
-        // There is no connection to close, so this is the only way the server knows right away.
-        // If the datagram gets lost its timeout removes us a few seconds later.
+        // No connection to close: without this the server only notices through its timeout
         if (!m_sessionOver) SendString("LEAVE:");
 
         if (m_socket != null) { try { m_socket.Close(); } catch { } m_socket = null; }
@@ -121,8 +90,7 @@ public class SocketsUDPClient : MonoBehaviour
         while (m_inbox.TryDequeue(out data))
             OnPacketReceived(data);
 
-        // The receive loop ended alone, normally because nobody is listening on the server port.
-        // It was noticed on the network thread, but the player list and the events belong here.
+        // The receive loop ended by itself, usually because no server is listening
         if (m_sessionOver)
         {
             Disconnect();
@@ -133,24 +101,23 @@ public class SocketsUDPClient : MonoBehaviour
         if (m_running) Heartbeat();
     }
 
-    // The server only knows we are still here if it keeps hearing from us.
     void Heartbeat()
     {
-        m_pingTimer += Time.unscaledDeltaTime;   // unscaled, or pausing with timeScale 0 would kick us
+        m_pingTimer += Time.unscaledDeltaTime;   // unscaled so timeScale 0 does not stop the pings
         if (m_pingTimer < PingInterval) return;
         m_pingTimer = 0f;
 
-        // The JOIN datagram can get lost too. Until the first PLAYERS arrives we repeat it instead
-        // of the ping, the server does not add us twice.
-        SendString(m_joined ? "PING:" : "JOIN:" + userName);
+        // The JOIN can be lost too, so it is repeated until the first PLAYERS arrives
+        if (m_joined) SendString("PING:");
+        else SendJoin();
     }
 
     void ClientThread()
     {
-        m_socket = StartClient();                                                    // TODO 1
+        m_socket = StartClient();
         if (m_socket == null) { WarnTodo(1, "StartClient() returned null"); return; }
 
-        try { m_serverEndPoint = ServerEndPoint(); }                                 // TODO 2
+        try { m_serverEndPoint = ServerEndPoint(); }
         catch (FormatException)
         {
             Log("[CLIENT] '" + serverIp + "' is not a valid IP address");
@@ -162,10 +129,10 @@ public class SocketsUDPClient : MonoBehaviour
         Log("[CLIENT] Ready, server is " + m_serverEndPoint);
 
         Socket socket = m_socket;
-        OnStarted();                                                                 // TODO 3
+        OnStarted();
         ReceiveLoop();
 
-        // Still running and still on this socket: the loop did not end because of Disconnect().
+        // The loop ended by itself, not because of Disconnect()
         if (m_running && socket == m_socket) m_sessionOver = true;
     }
 
@@ -175,21 +142,19 @@ public class SocketsUDPClient : MonoBehaviour
 
         try
         {
-            int sent = SendRaw(m_socket, payload, m_serverEndPoint);                 // TODO 4
+            int sent = SendRaw(m_socket, payload, m_serverEndPoint);
             if (sent < 0) WarnTodo(4, "SendRaw() is not implemented yet");
         }
         catch (SocketException e) { Log("[CLIENT] Send failed: " + e.SocketErrorCode); }
         catch (ObjectDisposedException) { }
     }
 
-    // Lab 3: the text goes out as a Text message, with its type byte in front (Messages.cs).
     public void SendString(string text)
     {
         SendPacket(Messages.Text(text));
     }
 
-    // The server adds our name and sends the line back to everybody, us included, so nothing is
-    // added to ChatHistory here.
+    // The server sends the line back to everybody, so it is not added to ChatHistory here
     public void SendChatMessage(string msg)
     {
         if (string.IsNullOrWhiteSpace(msg)) return;
@@ -202,19 +167,16 @@ public class SocketsUDPClient : MonoBehaviour
 
         while (m_running)
         {
-            // Blank endpoint: ReceiveFrom fills it with the sender. Here it is always the server,
-            // so you do not really need it, but the API asks for it anyway (slide 10).
             EndPoint from = new IPEndPoint(IPAddress.Any, 0);
 
             int received;
-            try { received = ReceiveRaw(m_socket, buffer, ref from); }                // TODO 5
+            try { received = ReceiveRaw(m_socket, buffer, ref from); }
             catch (SocketException e)
             {
-                // Windows reports "nobody is listening there" as an error on receive, which is the
-                // closest thing UDP has to "the server is down".
+                // Windows reports a closed server port here
                 if (e.SocketErrorCode == SocketError.ConnectionReset)
                 {
-                    Log("[CLIENT] No server on " + m_serverEndPoint + " (slide 34)");
+                    Log("[CLIENT] No server on " + m_serverEndPoint);
                     return;
                 }
                 if (m_running) Log("[CLIENT] Receive failed: " + e.SocketErrorCode);
@@ -232,8 +194,6 @@ public class SocketsUDPClient : MonoBehaviour
         }
     }
 
-    // Lab 3: the first byte says what the packet is (slide 18). The lobby messages are Text, and
-    // OnTextReceived() handles them exactly as in Lab 2.
     void OnPacketReceived(byte[] data)
     {
         MsgType msgType;
@@ -252,30 +212,28 @@ public class SocketsUDPClient : MonoBehaviour
                 else Log("[CLIENT] Dropped a broken Text message");
                 break;
             default:
-                Log("[CLIENT] No code for " + msgType + " messages yet, dropped");
+                Log("[CLIENT] Unexpected " + msgType + " message, dropped");
                 break;
         }
     }
 
-    // Runs in Update(), so the lists and the events are safe here.
     void OnTextReceived(string text)
     {
         if (text.StartsWith("PLAYERS:", StringComparison.Ordinal))
         {
             string names = text.Substring("PLAYERS:".Length);
 
-            // The server always sends the whole list, so we replace ours instead of merging.
             CurrentPlayers.Clear();
             if (names.Length > 0) CurrentPlayers.AddRange(names.Split(','));   // "" would give one empty name
 
-            m_joined = true;   // the list is only sent to players, so the server has us
+            m_joined = true;   // only players receive the list
 
             Log("[CLIENT] Players: " + names);
             if (OnPlayersUpdated != null) OnPlayersUpdated(CurrentPlayers);
         }
         else if (text.StartsWith("CHAT:", StringComparison.Ordinal))
         {
-            string line = text.Substring("CHAT:".Length);   // already "name: text", the server builds it
+            string line = text.Substring("CHAT:".Length);
 
             ChatHistory.Add(line);
             if (ChatHistory.Count > MaxChatLines) ChatHistory.RemoveAt(0);
@@ -329,8 +287,7 @@ public class SocketsUDPClient : MonoBehaviour
         GUILayout.BeginArea(new Rect(10, 10, Screen.width - 20, Screen.height - 20));
         GUILayout.Label("UDP CLIENT   port " + port + "   name " + userName);
 
-        // Read once: the buttons change m_running, and the layout must not change in the middle
-        // of one OnGUI call.
+        // Read once so the layout does not change in the middle of OnGUI
         bool running = m_running;
 
         GUILayout.BeginHorizontal();
@@ -366,57 +323,46 @@ public class SocketsUDPClient : MonoBehaviour
         GUILayout.EndArea();
     }
 
-    // =============================================================================================
-    //  TODO AREA - this is the only part you have to write
-    // =============================================================================================
-
-    // --------------------------------------------------------------------------------- TODO 1 ---
-    //  Goal: create the client socket and return it.
-    //  Shorter than you expect: no Connect(), and no Bind() either, because the first SendTo()
-    //  makes the system choose a local port for you (slide 6).
-    //  Careful with the socket type and the protocol: datagrams, not streams.
     Socket StartClient()
     {
         Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-        return socket;   // replace with the socket you created
+        return socket;
     }
 
-    // --------------------------------------------------------------------------------- TODO 2 ---
-    //  Goal: build and return the address of the server, using 'serverIp' and 'port'.
-    //  This is the envelope you will write on every message you send (slide 10).
-    //  Look it up: IPEndPoint and IPAddress in the docs. IPAddress.Parse turns "127.0.0.1" into an
-    //  IPAddress. The return type is EndPoint, and IPEndPoint is an EndPoint.
-    //  Console when it works:  [CLIENT] Ready, server is 127.0.0.1:9050
     EndPoint ServerEndPoint()
     {
         return new IPEndPoint(IPAddress.Parse(serverIp), port);
     }
 
-    // --------------------------------------------------------------------------------- TODO 3 ---
-    //  Introduce yourself with JOIN: and our name.
-    //  In TCP the connection was made by Connect(). Here there is no connection: this first
-    //  message is the only thing that tells the server that you exist (slide 9).
-    //  Console when it works: the server prints  [SERVER] Player joined from 127.0.0.1:6xxxx
     void OnStarted()
     {
-        SendString("JOIN:" + userName);
+        SendJoin();
     }
 
-    // --------------------------------------------------------------------------------- TODO 4 ---
-    //  Goal: send 'data' through 'socket' to the address 'to', and return how many bytes went out.
-    //  Look it up: Socket.SendTo in the docs.
+    void SendJoin()
+    {
+        SendString("JOIN:" + userName);
+        SendPacket(Messages.Player(MyData()));
+    }
+
+    PlayerDTO2 MyData()
+    {
+        PlayerDTO2 dto = new PlayerDTO2();
+        dto.playerName = userName;
+        dto.level = level;
+        dto.ownedPokemons = new List<Pokemon>();
+        foreach (Pokemon p in pokemons)
+            if (p != null && !string.IsNullOrEmpty(p.name)) dto.ownedPokemons.Add(p);
+        return dto;
+    }
+
     int SendRaw(Socket socket, byte[] data, EndPoint to)
     {
-        return socket.SendTo(data,to);   // replace with the number of bytes sent
+        return socket.SendTo(data,to);
     }
 
-    // --------------------------------------------------------------------------------- TODO 5 ---
-    //  Goal: receive one datagram into 'buffer' and return its size.
-    //  Look it up: Socket.ReceiveFrom in the docs. 'from' is passed with 'ref' because the method
-    //  fills it with the address of the sender.
-    //  Console when it works:  [CLIENT] Received: MyServer
     int ReceiveRaw(Socket socket, byte[] buffer, ref EndPoint from)
     {
-        return socket.ReceiveFrom(buffer,ref from);   // replace with the number of bytes received
+        return socket.ReceiveFrom(buffer,ref from);
     }
 }
