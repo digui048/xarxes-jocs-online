@@ -18,13 +18,12 @@ public static class Messages
 
     public static byte[] Player(PlayerDTO2 dto)
     {
-        MemoryStream stream = new MemoryStream();
-        BinaryWriter writer = new BinaryWriter(stream);
+        return Wrap(MsgType.Player, Serializer.Serialize(dto));
+    }
 
-        writer.Write((byte)MsgType.Player);
-        writer.Write(Serializer.Serialize(dto));
-
-        return stream.ToArray();
+    public static byte[] GameStart(GameStartDTO dto)
+    {
+        return Wrap(MsgType.GameStart, Serializer.Serialize(dto));
     }
 
     // Leaves 'reader' after the type byte. False for an empty packet or an unknown type
@@ -50,22 +49,14 @@ public static class Messages
         catch (FormatException) { return null; }
     }
 
-    // False if the rest of the packet is not a valid PlayerDTO2
     public static bool ReadPlayer(BinaryReader reader, out PlayerDTO2 dto)
     {
-        Stream stream = reader.BaseStream;
-        byte[] content = reader.ReadBytes((int)(stream.Length - stream.Position));
+        return Read(reader, Serializer.DeserializePlayerDTO2, out dto);
+    }
 
-        try
-        {
-            dto = Serializer.DeserializePlayerDTO2(content);
-            return true;
-        }
-        catch (IOException) { }
-        catch (FormatException) { }
-
-        dto = new PlayerDTO2();
-        return false;
+    public static bool ReadGameStart(BinaryReader reader, out GameStartDTO dto)
+    {
+        return Read(reader, Serializer.DeserializeGameStart, out dto);
     }
 
     public static string PokemonNames(PlayerDTO2 dto)
@@ -73,5 +64,31 @@ public static class Messages
         List<string> names = new List<string>();
         foreach (Pokemon p in dto.ownedPokemons) names.Add(p.name);
         return string.Join(", ", names);
+    }
+
+    static byte[] Wrap(MsgType type, byte[] content)
+    {
+        byte[] packet = new byte[1 + content.Length];
+        packet[0] = (byte)type;
+        content.CopyTo(packet, 1);
+        return packet;
+    }
+
+    // False if the rest of the packet cannot be read by 'deserialize'
+    static bool Read<T>(BinaryReader reader, Func<byte[], T> deserialize, out T dto)
+    {
+        Stream stream = reader.BaseStream;
+        byte[] content = reader.ReadBytes((int)(stream.Length - stream.Position));
+
+        try
+        {
+            dto = deserialize(content);
+            return true;
+        }
+        catch (IOException) { }
+        catch (FormatException) { }
+
+        dto = default(T);
+        return false;
     }
 }

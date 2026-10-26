@@ -23,9 +23,11 @@ public class SocketsUDPClient : MonoBehaviour
     public List<string> CurrentPlayers { get; } = new List<string>();
     public List<string> ChatHistory { get; } = new List<string>();
     public Dictionary<string, PlayerDTO2> PlayerData { get; } = new Dictionary<string, PlayerDTO2>();
+    public GameStartDTO CurrentGame { get; private set; }
 
     public event Action<List<string>> OnPlayersUpdated;
     public event Action<string> OnChatMessageReceived;
+    public event Action<GameStartDTO> OnGameStarted;
 
     const int MaxPacketSize = 64 * 1024;
 
@@ -61,6 +63,7 @@ public class SocketsUDPClient : MonoBehaviour
         CurrentPlayers.Clear();
         ChatHistory.Clear();
         PlayerData.Clear();
+        CurrentGame = new GameStartDTO();
 
         StartThread(ClientThread);
     }
@@ -219,10 +222,22 @@ public class SocketsUDPClient : MonoBehaviour
                 if (Messages.ReadPlayer(reader, out dto)) PlayerData[dto.playerName] = dto;
                 else Log("[CLIENT] Dropped a broken Player message");
                 break;
+            case MsgType.GameStart:
+                GameStartDTO game;
+                if (Messages.ReadGameStart(reader, out game)) OnGameStart(game);
+                else Log("[CLIENT] Dropped a broken GameStart message");
+                break;
             default:
                 Log("[CLIENT] Unexpected " + msgType + " message, dropped");
                 break;
         }
+    }
+
+    void OnGameStart(GameStartDTO game)
+    {
+        CurrentGame = game;
+        Log("[CLIENT] Game started, my id is " + game.yourId);
+        if (OnGameStarted != null) OnGameStarted(game);
     }
 
     void OnTextReceived(string text)

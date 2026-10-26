@@ -22,6 +22,7 @@ public class SocketsUDPServer : MonoBehaviour
 
     class ClientInfo
     {
+        public int id;
         public EndPoint endPoint;
         public string name;
         public PlayerDTO2 data;
@@ -36,6 +37,7 @@ public class SocketsUDPServer : MonoBehaviour
     readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
     volatile bool m_listening;
+    int m_nextId;
 
     public bool IsRunning { get { return m_running; } }
     public bool IsListening { get { return m_running && m_listening; } }
@@ -52,6 +54,7 @@ public class SocketsUDPServer : MonoBehaviour
     {
         if (m_running) return;
         m_running = true;
+        m_nextId = 1;
         StartThread(ServerThread);
     }
 
@@ -284,7 +287,7 @@ public class SocketsUDPServer : MonoBehaviour
         {
             if (isNew)
             {
-                client = new ClientInfo { endPoint = from, lastSeen = time };
+                client = new ClientInfo { id = m_nextId++, endPoint = from, lastSeen = time };
                 m_clients.Add(client);
             }
             client.name = dto.playerName;
@@ -296,6 +299,26 @@ public class SocketsUDPServer : MonoBehaviour
         Log("[SERVER] Player data from " + dto.playerName + ": level " + dto.level +
             ", Pokemon: " + (pokemons.Length > 0 ? pokemons : "none"));
         BroadcastPlayers();
+    }
+
+    // Everybody gets the same seed and climber list, and its own id
+    public void StartGame(float duration)
+    {
+        List<ClientInfo> clients;
+        lock (m_clients) clients = new List<ClientInfo>(m_clients);
+
+        GameStartDTO game = new GameStartDTO();
+        game.seed = new System.Random().Next();
+        game.duration = duration;
+        game.climbers = new List<ClimberDTO>();
+        foreach (ClientInfo c in clients) game.climbers.Add(new ClimberDTO { id = c.id, name = c.name });
+
+        foreach (ClientInfo c in clients)
+        {
+            game.yourId = c.id;
+            SendPacket(Messages.GameStart(game), c.endPoint);
+        }
+        Log("[SERVER] Game started with " + clients.Count + " climbers");
     }
 
     void OnChat(string message, ClientInfo client)

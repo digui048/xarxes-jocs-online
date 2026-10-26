@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class LobbyUI : MonoBehaviour
 {
@@ -11,6 +12,10 @@ public class LobbyUI : MonoBehaviour
     const float ServerStartTimeout = 2f;   // seconds
     const float ConnectTimeout = 5f;       // seconds
     const int MaxPokemons = 6;
+    const float GameDuration = 30f;   // seconds
+
+    // Shown on the menu when the game scene sends us back, for example when the server is gone
+    public static string PendingStatus = "";
 
     [Header("Network")]
     public SocketsTCPServer tcpServer;
@@ -39,6 +44,7 @@ public class LobbyUI : MonoBehaviour
     public TMP_Text playerListText;
     public TMP_Text chatHistoryText;
     public TMP_InputField chatInput;
+    public GameObject startButton;
 
     enum State { Menu, StartingServer, Connecting, InRoom }
 
@@ -61,6 +67,7 @@ public class LobbyUI : MonoBehaviour
         tcpClient.OnChatMessageReceived += OnChatMessageReceived;
         udpClient.OnPlayersUpdated += OnPlayersUpdated;
         udpClient.OnChatMessageReceived += OnChatMessageReceived;
+        udpClient.OnGameStarted += OnGameStarted;
 
         chatInput.onSubmit.AddListener(OnChatSubmitted);
 
@@ -72,7 +79,8 @@ public class LobbyUI : MonoBehaviour
     void Start()
     {
         localIpText.text = GetLocalIp();
-        ShowMenu("");
+        ShowMenu(PendingStatus);
+        PendingStatus = "";
     }
 
     void OnDestroy()
@@ -86,6 +94,7 @@ public class LobbyUI : MonoBehaviour
         {
             udpClient.OnPlayersUpdated -= OnPlayersUpdated;
             udpClient.OnChatMessageReceived -= OnChatMessageReceived;
+            udpClient.OnGameStarted -= OnGameStarted;
         }
     }
 
@@ -170,6 +179,12 @@ public class LobbyUI : MonoBehaviour
 
         if (m_useUdp) udpClient.SendChatMessage(text);
         else tcpClient.SendChatMessage(text);
+    }
+
+    // Only the host of a UDP room has the button
+    public void StartGame()
+    {
+        if (m_state == State.InRoom && m_hosting && m_useUdp) udpServer.StartGame(GameDuration);
     }
 
     public void LeaveGame()
@@ -272,6 +287,16 @@ public class LobbyUI : MonoBehaviour
         chatHistoryText.text = string.Join("\n", ChatHistory);
     }
 
+    // The connection has to survive the scene change, the rest of the menu is unloaded
+    void OnGameStarted(GameStartDTO game)
+    {
+        if (m_state != State.InRoom) return;
+
+        DontDestroyOnLoad(udpClient.gameObject);
+        if (m_hosting) DontDestroyOnLoad(udpServer.gameObject);
+        SceneManager.LoadScene(LeafLeapGame.SceneName);
+    }
+
     void OnChatSubmitted(string text)
     {
         SendChat();
@@ -295,6 +320,7 @@ public class LobbyUI : MonoBehaviour
         playerListText.text = "";
         chatHistoryText.text = "";
         chatInput.text = "";
+        startButton.SetActive(m_hosting && m_useUdp);
         m_focusChat = true;
     }
 

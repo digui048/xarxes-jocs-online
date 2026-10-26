@@ -1,6 +1,7 @@
 # XarxesSocketAndEveryoneElse
 
 Lab 2 (Deliverable 2) of Xarxes i Jocs Online: a lobby with a waiting room and a chat, working over TCP and over UDP.
+Lab 3 adds binary serialization of the player data, explained in the last section.
 
 ## How to run it
 
@@ -32,3 +33,30 @@ The code is in `My project/My project/Assets/Lab2/Scripts`: the TCP and UDP serv
 - In UDP, if the host disappears, players on other PCs may stay in the waiting room, because nothing tells them that the server is gone. In TCP they are sent back to the menu.
 - Two players can join with the same name.
 - The chat only shows the latest lines. You cannot scroll back to the older ones.
+
+## Lab 3: data serialization
+
+### What we added
+
+- `Serializer` turns a `PlayerDTO` and a `PlayerDTO2` (name, level and a list of Pokemon) into bytes with `BinaryWriter`, and back with `BinaryReader`. It also does the same with JSON to compare: the test player is 90 bytes in JSON and 31 in binary.
+- To check it, open `Assets/Lab3/Scenes/S_SerializationTest` and press Play. Every test says PASS.
+- In the lobby menu, each player sets a level and a list of Pokemon. The waiting room shows the level and the team of every player.
+
+### Message format
+
+Every message starts with one byte that says what it is:
+
+| Byte | Type | Content |
+|---|---|---|
+| 1 | Text | A string written with `BinaryWriter`: `CHAT:hello`, `PLAYERS:Anna,Marc`, `LEAVE:` or `PING:` |
+| 2 | Player | A `PlayerDTO2`: the name, the level, how many Pokemon, and then the name of each one |
+
+- To join, a client sends its `PlayerDTO2`. If it sends it again later, the server updates its data.
+- Every time a player joins, leaves or changes its data, the server sends the `PlayerDTO2` of every player to everyone, and then the `PLAYERS:` list.
+- In TCP every message also has its length in front, in 4 bytes. In UDP one datagram is one message.
+- Byte order: both ends use `BinaryWriter` and `BinaryReader`, which are always little-endian, so nothing has to be converted.
+
+### Known problems
+
+- Builds from Lab 2 and builds from Lab 3 cannot play together, because the messages are different. Everyone needs a build of the same version.
+- If two players use the same name, both show the same level and team in the list.

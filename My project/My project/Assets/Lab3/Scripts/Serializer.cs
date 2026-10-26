@@ -22,6 +22,45 @@ public static class Serializer
         return stream.ToArray();
     }
 
+    public static byte[] Serialize(GameStartDTO dto)
+    {
+        MemoryStream stream = new MemoryStream();
+        BinaryWriter writer = new BinaryWriter(stream);
+
+        writer.Write(dto.seed);
+        writer.Write(dto.duration);
+        writer.Write(dto.yourId);
+        writer.Write(dto.climbers.Count);
+        foreach (ClimberDTO climber in dto.climbers)
+        {
+            writer.Write(climber.id);
+            writer.Write(climber.name);
+        }
+
+        return stream.ToArray();
+    }
+
+    public static GameStartDTO DeserializeGameStart(byte[] data)
+    {
+        BinaryReader reader = new BinaryReader(new MemoryStream(data));
+        GameStartDTO dto = new GameStartDTO();
+        dto.climbers = new List<ClimberDTO>();
+
+        dto.seed = reader.ReadInt32();
+        dto.duration = reader.ReadSingle();
+        dto.yourId = reader.ReadInt32();
+        int count = reader.ReadInt32();
+        for (int i = 0; i < count; i++)
+        {
+            ClimberDTO climber = new ClimberDTO();
+            climber.id = reader.ReadInt32();
+            climber.name = reader.ReadString();
+            dto.climbers.Add(climber);
+        }
+
+        return dto;
+    }
+
     public static PlayerDTO DeserializePlayerDTO(byte[] data)
     {
         BinaryReader reader = new BinaryReader(new MemoryStream(data));
