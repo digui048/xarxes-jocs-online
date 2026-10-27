@@ -89,6 +89,39 @@ public static class Serializer
         return dto;
     }
 
+    public static byte[] Serialize(GameOverDTO dto)
+    {
+        MemoryStream stream = new MemoryStream();
+        BinaryWriter writer = new BinaryWriter(stream);
+
+        writer.Write(dto.results.Count);
+        foreach (ResultDTO result in dto.results)
+        {
+            writer.Write(result.id);
+            writer.Write(result.metres);
+        }
+
+        return stream.ToArray();
+    }
+
+    public static GameOverDTO DeserializeGameOver(byte[] data)
+    {
+        BinaryReader reader = new BinaryReader(new MemoryStream(data));
+        GameOverDTO dto = new GameOverDTO();
+        dto.results = new List<ResultDTO>();
+
+        int count = reader.ReadInt32();
+        for (int i = 0; i < count; i++)
+        {
+            ResultDTO result = new ResultDTO();
+            result.id = reader.ReadInt32();
+            result.metres = reader.ReadInt32();
+            dto.results.Add(result);
+        }
+
+        return dto;
+    }
+
     public static PlayerDTO DeserializePlayerDTO(byte[] data)
     {
         BinaryReader reader = new BinaryReader(new MemoryStream(data));

@@ -26,6 +26,11 @@ public static class Messages
         return Wrap(MsgType.Transform, Serializer.Serialize(dto));
     }
 
+    public static byte[] GameOver(GameOverDTO dto)
+    {
+        return Wrap(MsgType.GameOver, Serializer.Serialize(dto));
+    }
+
     public static byte[] GameStart(GameStartDTO dto)
     {
         return Wrap(MsgType.GameStart, Serializer.Serialize(dto));
@@ -62,6 +67,11 @@ public static class Messages
     public static bool ReadTransform(BinaryReader reader, out TransformDTO dto)
     {
         return Read(reader, Serializer.DeserializeTransform, out dto);
+    }
+
+    public static bool ReadGameOver(BinaryReader reader, out GameOverDTO dto)
+    {
+        return Read(reader, Serializer.DeserializeGameOver, out dto);
     }
 
     public static bool ReadGameStart(BinaryReader reader, out GameStartDTO dto)

@@ -26,7 +26,6 @@ public class SocketsTCPServer : MonoBehaviour
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<Packet> m_inbox = new ConcurrentQueue<Packet>();
     readonly List<string> m_log = new List<string>();
-    readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
     volatile bool m_listening;
 
@@ -93,8 +92,6 @@ public class SocketsTCPServer : MonoBehaviour
             m_running = false;
             return;
         }
-
-        if (m_listener == null) { WarnTodo(1, "StartServer() returned null"); return; }
         Log("[SERVER] Listening on " + port);
         m_listening = true;
 
@@ -104,8 +101,6 @@ public class SocketsTCPServer : MonoBehaviour
             try { client = AcceptClient(); }
             catch (SocketException) { break; }
             catch (ObjectDisposedException) { break; }
-
-            if (client == null) { WarnTodo(2, "AcceptClient() returned null"); return; }
 
             lock (m_clients) m_clients.Add(client);
             Log("[SERVER] Client connected: " + client.RemoteEndPoint);
@@ -136,8 +131,7 @@ public class SocketsTCPServer : MonoBehaviour
 
         try
         {
-            int sent = SendRaw(to, framed);
-            if (sent < 0) WarnTodo(3, "SendRaw() is not implemented yet");
+            SendRaw(to, framed);
         }
         catch (SocketException e) { Log("[SERVER] Send failed: " + e.SocketErrorCode); }
         catch (ObjectDisposedException) { }
@@ -175,8 +169,6 @@ public class SocketsTCPServer : MonoBehaviour
             try { read = ReceiveRaw(socket, buffer, total, count - total); }
             catch (SocketException e) { Log("[SERVER] Connection lost: " + e.SocketErrorCode); return false; }
             catch (ObjectDisposedException) { return false; }
-
-            if (read < 0) { WarnTodo(4, "ReceiveRaw() is not implemented yet"); return false; }
             if (read == 0) return false;   // connection closed
             total += read;
         }
@@ -204,11 +196,6 @@ public class SocketsTCPServer : MonoBehaviour
         lock (m_log) { m_log.Add(message); if (m_log.Count > 100) m_log.RemoveAt(0); }
     }
 
-    void WarnTodo(int number, string detail)
-    {
-        lock (m_warned) { if (!m_warned.Add(number)) return; }
-        Log("[TODO " + number + "] not done yet: " + detail);
-    }
 
     void ParseCommandLine()
     {

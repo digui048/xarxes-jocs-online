@@ -29,6 +29,7 @@ public class SocketsUDPClient : MonoBehaviour
     public event Action<string> OnChatMessageReceived;
     public event Action<GameStartDTO> OnGameStarted;
     public event Action<TransformDTO> OnTransformReceived;
+    public event Action<GameOverDTO> OnGameOver;
 
     const int MaxPacketSize = 64 * 1024;
 
@@ -37,7 +38,6 @@ public class SocketsUDPClient : MonoBehaviour
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<byte[]> m_inbox = new ConcurrentQueue<byte[]>();
     readonly List<string> m_log = new List<string>();
-    readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
     volatile bool m_sessionOver;
     bool m_joined;
@@ -122,7 +122,6 @@ public class SocketsUDPClient : MonoBehaviour
     void ClientThread()
     {
         m_socket = StartClient();
-        if (m_socket == null) { WarnTodo(1, "StartClient() returned null"); return; }
 
         try { m_serverEndPoint = ServerEndPoint(); }
         catch (FormatException)
@@ -131,7 +130,6 @@ public class SocketsUDPClient : MonoBehaviour
             if (m_running) m_sessionOver = true;
             return;
         }
-        if (m_serverEndPoint == null) { WarnTodo(2, "ServerEndPoint() returned null"); return; }
 
         Log("[CLIENT] Ready, server is " + m_serverEndPoint);
 
@@ -149,8 +147,7 @@ public class SocketsUDPClient : MonoBehaviour
 
         try
         {
-            int sent = SendRaw(m_socket, payload, m_serverEndPoint);
-            if (sent < 0) WarnTodo(4, "SendRaw() is not implemented yet");
+            SendRaw(m_socket, payload, m_serverEndPoint);
         }
         catch (SocketException e) { Log("[CLIENT] Send failed: " + e.SocketErrorCode); }
         catch (ObjectDisposedException) { }
@@ -195,8 +192,6 @@ public class SocketsUDPClient : MonoBehaviour
                 return;
             }
             catch (ObjectDisposedException) { return; }
-
-            if (received < 0) { WarnTodo(5, "ReceiveRaw() is not implemented yet"); return; }
             if (received == 0) continue;
 
             byte[] payload = new byte[received];
@@ -233,6 +228,11 @@ public class SocketsUDPClient : MonoBehaviour
                 if (!Messages.ReadTransform(reader, out state)) Log("[CLIENT] Dropped a broken Transform message");
                 else if (OnTransformReceived != null) OnTransformReceived(state);
                 break;
+            case MsgType.GameOver:
+                GameOverDTO results;
+                if (!Messages.ReadGameOver(reader, out results)) Log("[CLIENT] Dropped a broken GameOver message");
+                else if (OnGameOver != null) OnGameOver(results);
+                break;
             case MsgType.GameStart:
                 GameStartDTO game;
                 if (Messages.ReadGameStart(reader, out game)) OnGameStart(game);
@@ -246,6 +246,9 @@ public class SocketsUDPClient : MonoBehaviour
 
     void OnGameStart(GameStartDTO game)
     {
+        // The server sends every GameStart more than once
+        if (CurrentGame.climbers != null && game.seed == CurrentGame.seed) return;
+
         CurrentGame = game;
         Log("[CLIENT] Game started, my id is " + game.yourId);
         if (OnGameStarted != null) OnGameStarted(game);
@@ -300,11 +303,6 @@ public class SocketsUDPClient : MonoBehaviour
         lock (m_log) { m_log.Add(message); if (m_log.Count > 100) m_log.RemoveAt(0); }
     }
 
-    void WarnTodo(int number, string detail)
-    {
-        lock (m_warned) { if (!m_warned.Add(number)) return; }
-        Log("[TODO " + number + "] not done yet: " + detail);
-    }
 
     void ParseCommandLine()
     {

@@ -29,4 +29,5 @@ public enum MsgType : byte
     Player = 2,
     Transform = 3,
     GameStart = 4,
+    GameOver = 5,
 }

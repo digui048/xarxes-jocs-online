@@ -22,9 +22,16 @@ public class LeafLeapGame : MonoBehaviour
     const float FallTime = 0.35f;            // seconds, plus FallTimePerLevel for each leaf lost
     const float FallTimePerLevel = 0.04f;
     const float MissPenalty = 0.3f;          // seconds without control after a fall
+    const int ChargeStreak = 10;             // right jumps in a row that charge the super jump
+    const int SuperJumpLeaves = 3;
+    const float SuperJumpTime = 0.45f;
+    const float SuperJumpArc = 1.6f;
+
     const float SendInterval = 0.05f;        // 20 states per second
     const float RemoteSmoothing = 20f;
     const float RemoteTimeout = 3f;          // seconds without states before a capsule is hidden
+    const float ResultsGrace = 0.5f;         // seconds the host waits after the end for the last states
+    const float ResultsRepeat = 1f;          // seconds between copies of the results
     const float CameraAbove = 3f;
     const float FacingCamera = 180f;
 
@@ -40,6 +47,10 @@ public class LeafLeapGame : MonoBehaviour
     static readonly Color VisorColor = new Color(0.12f, 0.12f, 0.18f);
 
     public TMP_Text infoText;
+    public TMP_Text timerText;
+    public GameObject resultsPanel;
+    public TMP_Text resultsText;
+    public GameObject playAgainButton;
     public Camera gameCamera;
     public Material baseMaterial;   // a URP Lit asset, so builds include the shader
 
@@ -51,6 +62,8 @@ public class LeafLeapGame : MonoBehaviour
         public float lastStateTime;
     }
 
+    enum Phase { Playing, TimeUp, Results }
+
     SocketsUDPClient m_client;
     SocketsUDPServer m_server;   // only on the host
     GameStartDTO m_game;
@@ -59,12 +72,20 @@ public class LeafLeapGame : MonoBehaviour
     readonly Dictionary<Color, Material> m_materials = new Dictionary<Color, Material>();
     bool m_leaving;
 
+    Phase m_phase = Phase.Playing;
+    float m_roundStart;
+    GameOverDTO m_results;
+    float m_nextResults;
+
     Climber m_me;
     int m_myColumn;
     int m_level;                 // 0 is the ground
+    int m_streak;
+    bool m_charged;
     float m_facing = FacingCamera;
     Vector3 m_jumpFrom;
     Vector3 m_jumpTo;
+    float m_jumpArc;
     float m_jumpStart;
     float m_jumpDuration;
     float m_busyUntil;
@@ -90,14 +111,21 @@ public class LeafLeapGame : MonoBehaviour
         m_me = m_climbers[m_game.yourId];
         m_jumpFrom = m_jumpTo = m_me.body.position;
         gameCamera.transform.position = new Vector3(0f, m_jumpTo.y + CameraAbove, -12f);
+        m_roundStart = Time.time;
+        resultsPanel.SetActive(false);
         ShowInfo();
 
         m_client.OnTransformReceived += OnRemoteState;
+        m_client.OnGameOver += OnGameOver;
+        m_client.OnGameStarted += OnNewRound;
     }
 
     void OnDestroy()
     {
-        if (m_client != null) m_client.OnTransformReceived -= OnRemoteState;
+        if (m_client == null) return;
+        m_client.OnTransformReceived -= OnRemoteState;
+        m_client.OnGameOver -= OnGameOver;
+        m_client.OnGameStarted -= OnNewRound;
     }
 
     void Update()
@@ -109,16 +137,34 @@ public class LeafLeapGame : MonoBehaviour
             return;
         }
 
-        ReadInput();
+        float timeLeft = m_game.duration - (Time.time - m_roundStart);
+        if (m_phase == Phase.Playing)
+        {
+            if (timeLeft > 0f) ReadInput();
+            else
+            {
+                m_phase = Phase.TimeUp;
+                ShowInfo();
+            }
+        }
+        if (m_server != null) DecideRound(timeLeft);
+
         MoveMe();
         MoveOthers();
         SendState();
         FollowWithCamera();
+        timerText.text = m_phase == Phase.Playing ? "0:" + Mathf.CeilToInt(timeLeft).ToString("00") : "";
     }
 
     public void Leave()
     {
         BackToMenu("");
+    }
+
+    // Host only: the server starts another round with a new beanstalk
+    public void PlayAgain()
+    {
+        if (m_server != null && m_phase == Phase.Results) m_server.StartGame(m_game.duration);
     }
 
     // The network objects were kept alive for this scene, so they go away here.
@@ -134,17 +180,70 @@ public class LeafLeapGame : MonoBehaviour
         SceneManager.LoadScene(MenuScene);
     }
 
+    void OnNewRound(GameStartDTO game)
+    {
+        SceneManager.LoadScene(SceneName);
+    }
+
+    // ---------------------------------------------------------------------------------- round
+
+    // Only the host decides who won, from the states its server received. It waits a moment after
+    // the end for the last ones, and repeats the results in case a datagram is lost
+    void DecideRound(float timeLeft)
+    {
+        if (timeLeft > -ResultsGrace || Time.time < m_nextResults) return;
+
+        if (m_results.results == null) m_results = ComputeResults();
+        m_server.BroadcastGameOver(m_results);
+        m_nextResults = Time.time + ResultsRepeat;
+    }
+
+    GameOverDTO ComputeResults()
+    {
+        List<ResultDTO> results = new List<ResultDTO>();
+        foreach (TransformDTO state in m_server.GetStates())
+            if (m_climbers.ContainsKey(state.id))
+                results.Add(new ResultDTO { id = state.id, metres = LevelAt(state.y) * MetresPerLeaf });
+        results.Sort((a, b) => b.metres.CompareTo(a.metres));
+        return new GameOverDTO { results = results };
+    }
+
+    void OnGameOver(GameOverDTO results)
+    {
+        m_phase = Phase.Results;
+        ShowInfo();
+        resultsPanel.SetActive(true);
+        playAgainButton.SetActive(m_server != null);
+
+        List<string> lines = new List<string> { "Results", "" };
+        List<string> winners = new List<string>();
+        for (int i = 0; i < results.results.Count; i++)
+        {
+            ResultDTO r = results.results[i];
+            lines.Add((i + 1) + ".   " + NameOf(r.id) + "   " + r.metres + " m");
+            if (r.metres == results.results[0].metres) winners.Add(NameOf(r.id));
+        }
+        lines.Add("");
+        if (winners.Count == 1) lines.Add(winners[0] + " wins!");
+        else if (winners.Count > 1) lines.Add(string.Join(" and ", winners) + " win!");
+        if (m_server == null) lines.Add("Waiting for the host to play again");
+        resultsText.text = string.Join("\n", lines);
+    }
+
+    // ------------------------------------------------------------------------------- climbing
+
     void ReadInput()
     {
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null || Time.time < m_busyUntil) return;
 
-        if (keyboard.leftArrowKey.wasPressedThisFrame || keyboard.aKey.wasPressedThisFrame) Jump(-1);
+        if (keyboard.spaceKey.wasPressedThisFrame && m_charged) SuperJump();
+        else if (keyboard.leftArrowKey.wasPressedThisFrame || keyboard.aKey.wasPressedThisFrame) Jump(-1);
         else if (keyboard.rightArrowKey.wasPressedThisFrame || keyboard.dKey.wasPressedThisFrame) Jump(1);
     }
 
     // The right side climbs one leaf. The wrong one falls to the first leaf below on that side,
-    // or to the ground
+    // or to the ground, and breaks the streak
     void Jump(int side)
     {
         int target = m_level + 1;
@@ -155,12 +254,37 @@ public class LeafLeapGame : MonoBehaviour
             while (target > 0 && m_sides[target - 1] != side) target--;
         }
 
+        m_facing = side * 90f;
+        if (hit)
+        {
+            m_streak++;
+            if (m_streak >= ChargeStreak) m_charged = true;
+            StartJump(target, JumpTime, JumpArc, 0f);
+        }
+        else
+        {
+            m_streak = 0;
+            StartJump(target, FallTime + (m_level - target) * FallTimePerLevel, JumpArc, MissPenalty);
+        }
+    }
+
+    void SuperJump()
+    {
+        int target = Mathf.Min(m_level + SuperJumpLeaves, Levels);
+        m_charged = false;
+        m_streak = 0;
+        m_facing = m_sides[target - 1] * 90f;
+        StartJump(target, SuperJumpTime, SuperJumpArc, 0f);
+    }
+
+    void StartJump(int target, float duration, float arc, float stun)
+    {
         m_jumpFrom = m_me.body.position;
         m_jumpTo = StandPosition(m_myColumn, target);
+        m_jumpArc = arc;
         m_jumpStart = Time.time;
-        m_jumpDuration = hit ? JumpTime : FallTime + (m_level - target) * FallTimePerLevel;
-        m_busyUntil = m_jumpStart + m_jumpDuration + (hit ? 0f : MissPenalty);
-        m_facing = side * 90f;
+        m_jumpDuration = duration;
+        m_busyUntil = m_jumpStart + duration + stun;
         m_level = target;
         ShowInfo();
     }
@@ -168,9 +292,11 @@ public class LeafLeapGame : MonoBehaviour
     void MoveMe()
     {
         float t = m_jumpDuration > 0f ? Mathf.Clamp01((Time.time - m_jumpStart) / m_jumpDuration) : 1f;
-        m_me.body.position = Vector3.Lerp(m_jumpFrom, m_jumpTo, t) + Vector3.up * (4f * t * (1f - t) * JumpArc);
+        m_me.body.position = Vector3.Lerp(m_jumpFrom, m_jumpTo, t) + Vector3.up * (4f * t * (1f - t) * m_jumpArc);
         m_me.body.rotation = Quaternion.Euler(0f, m_facing, 0f);
     }
+
+    // ---------------------------------------------------------------------------------- states
 
     void SendState()
     {
@@ -205,6 +331,8 @@ public class LeafLeapGame : MonoBehaviour
         }
     }
 
+    // -------------------------------------------------------------------------------------- view
+
     void FollowWithCamera()
     {
         Vector3 position = gameCamera.transform.position;
@@ -214,9 +342,21 @@ public class LeafLeapGame : MonoBehaviour
 
     void ShowInfo()
     {
-        infoText.text = "Leaf Leap   -   you are the " + ColorNames[m_myColumn % ColorNames.Length] +
+        string text = "Leaf Leap   -   you are the " + ColorNames[m_myColumn % ColorNames.Length] +
             " capsule   -   " + m_level * MetresPerLeaf + " m";
+        if (m_phase == Phase.TimeUp) text += "   -   time is up!";
+        else if (m_phase == Phase.Playing) text += m_charged ? "   -   SPACE: super jump!" : "   -   charge " + m_streak + "/" + ChargeStreak;
+        infoText.text = text;
     }
+
+    string NameOf(int id)
+    {
+        foreach (ClimberDTO climber in m_game.climbers)
+            if (climber.id == id) return climber.name;
+        return "?";
+    }
+
+    // ------------------------------------------------------------------------------ beanstalks
 
     // The same seed gives the same beanstalk on every screen. Never more than 3 leaves in a row on one side
     public static int[] LeafSides(int seed, int count)
@@ -236,6 +376,12 @@ public class LeafLeapGame : MonoBehaviour
             sides[i] = side;
         }
         return sides;
+    }
+
+    // The leaf a capsule at this height stands on, from its position in a Transform message
+    static int LevelAt(float y)
+    {
+        return Mathf.Max(0, Mathf.RoundToInt((y - ClimberHalfHeight - LeafThickness / 2f) / LevelHeight));
     }
 
     int ColumnOf(int id)

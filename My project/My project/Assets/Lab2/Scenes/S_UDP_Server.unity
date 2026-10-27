@@ -128,7 +128,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 481956937}
-  - component: {fileID: 481956936}
   - component: {fileID: 481956938}
   m_Layer: 0
   m_Name: SocketsUDPServer
@@ -137,21 +136,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &481956936
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 481956935}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5daade4571b6e3b438bbfdf844ca8c18, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::SocketsUDPServerSolution
-  port: 9050
-  serverName: MyServer
-  autoStart: 1
 --- !u!4 &481956937
 Transform:
   m_ObjectHideFlags: 0
@@ -182,6 +166,7 @@ MonoBehaviour:
   port: 9050
   serverName: MyServer
   autoStart: 1
+  showDebugView: 1
   clientTimeout: 5
 --- !u!1 &1345092334
 GameObject:

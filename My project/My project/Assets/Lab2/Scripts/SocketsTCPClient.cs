@@ -32,7 +32,6 @@ public class SocketsTCPClient : MonoBehaviour
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<byte[]> m_inbox = new ConcurrentQueue<byte[]>();
     readonly List<string> m_log = new List<string>();
-    readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
     volatile bool m_sessionOver;
     volatile int m_session;
@@ -117,8 +116,6 @@ public class SocketsTCPClient : MonoBehaviour
             return;
         }
 
-        if (socket == null) { WarnTodo(1, "StartClient() returned null"); return; }
-
         // Disconnect() was called while connecting: drop the socket before it joins
         if (!m_running || session != m_session) { CloseSocket(socket); return; }
 
@@ -148,8 +145,7 @@ public class SocketsTCPClient : MonoBehaviour
 
         try
         {
-            int sent = SendRaw(m_connection, framed);
-            if (sent < 0) WarnTodo(3, "SendRaw() is not implemented yet");
+            SendRaw(m_connection, framed);
         }
         catch (SocketException e) { Log("[CLIENT] Send failed: " + e.SocketErrorCode); }
         catch (ObjectDisposedException) { }
@@ -198,8 +194,6 @@ public class SocketsTCPClient : MonoBehaviour
                 return false;
             }
             catch (ObjectDisposedException) { return false; }
-
-            if (read < 0) { WarnTodo(4, "ReceiveRaw() is not implemented yet"); return false; }
             if (read == 0) return false;   // connection closed
             total += read;
         }
@@ -288,11 +282,6 @@ public class SocketsTCPClient : MonoBehaviour
         lock (m_log) { m_log.Add(message); if (m_log.Count > 100) m_log.RemoveAt(0); }
     }
 
-    void WarnTodo(int number, string detail)
-    {
-        lock (m_warned) { if (!m_warned.Add(number)) return; }
-        Log("[TODO " + number + "] not done yet: " + detail);
-    }
 
     void ParseCommandLine()
     {

@@ -26,3 +26,16 @@ public struct GameStartDTO
     public int yourId;
     public List<ClimberDTO> climbers;
 }
+
+[Serializable]
+public struct ResultDTO
+{
+    public int id;
+    public int metres;
+}
+
+[Serializable]
+public struct GameOverDTO
+{
+    public List<ResultDTO> results;   // highest first
+}

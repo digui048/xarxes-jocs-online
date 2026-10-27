@@ -16,6 +16,8 @@ public class SocketsUDPServer : MonoBehaviour
     public float clientTimeout = 5f;   // seconds of silence before a client is dropped
 
     const int MaxPacketSize = 64 * 1024;
+    const int StartRepeats = 2;               // GameStart goes out 3 times, a lost one does not leave anybody behind
+    const float StartRepeatInterval = 0.2f;   // seconds
 
     // time: when the datagram arrived, taken on the network thread
     struct Packet { public byte[] data; public EndPoint from; public DateTime time; }
@@ -26,6 +28,8 @@ public class SocketsUDPServer : MonoBehaviour
         public EndPoint endPoint;
         public string name;
         public PlayerDTO2 data;
+        public TransformDTO state;
+        public bool hasState;
         public DateTime lastSeen;
     }
 
@@ -34,10 +38,12 @@ public class SocketsUDPServer : MonoBehaviour
     readonly List<Thread> m_threads = new List<Thread>();
     readonly ConcurrentQueue<Packet> m_inbox = new ConcurrentQueue<Packet>();
     readonly List<string> m_log = new List<string>();
-    readonly HashSet<int> m_warned = new HashSet<int>();
     volatile bool m_running;
     volatile bool m_listening;
     int m_nextId;
+    GameStartDTO m_lastStart;
+    int m_startRepeatsLeft;
+    float m_nextStartRepeat;
 
     public bool IsRunning { get { return m_running; } }
     public bool IsListening { get { return m_running && m_listening; } }
@@ -86,6 +92,13 @@ public class SocketsUDPServer : MonoBehaviour
 
         // After the queue, so the pings waiting in it already count
         if (m_running) CheckTimeouts();
+
+        if (m_startRepeatsLeft > 0 && Time.unscaledTime >= m_nextStartRepeat)
+        {
+            SendGameStart();
+            m_startRepeatsLeft--;
+            m_nextStartRepeat = Time.unscaledTime + StartRepeatInterval;
+        }
     }
 
     void ServerThread()
@@ -99,8 +112,6 @@ public class SocketsUDPServer : MonoBehaviour
             m_running = false;
             return;
         }
-
-        if (m_socket == null) { WarnTodo(1, "StartServer() returned null"); return; }
         Log("[SERVER] Listening on " + port);
         m_listening = true;
 
@@ -113,8 +124,7 @@ public class SocketsUDPServer : MonoBehaviour
 
         try
         {
-            int sent = SendRaw(m_socket, payload, to);
-            if (sent < 0) WarnTodo(2, "SendRaw() is not implemented yet");
+            SendRaw(m_socket, payload, to);
         }
         catch (SocketException e) { Log("[SERVER] Send failed: " + e.SocketErrorCode); }
         catch (ObjectDisposedException) { }
@@ -144,8 +154,6 @@ public class SocketsUDPServer : MonoBehaviour
                 return;
             }
             catch (ObjectDisposedException) { return; }
-
-            if (received < 0) { WarnTodo(3, "ReceiveRaw() is not implemented yet"); return; }
             if (received == 0) continue;
 
             byte[] payload = new byte[received];
@@ -169,11 +177,6 @@ public class SocketsUDPServer : MonoBehaviour
         lock (m_log) { m_log.Add(message); if (m_log.Count > 100) m_log.RemoveAt(0); }
     }
 
-    void WarnTodo(int number, string detail)
-    {
-        lock (m_warned) { if (!m_warned.Add(number)) return; }
-        Log("[TODO " + number + "] not done yet: " + detail);
-    }
 
     void ParseCommandLine()
     {
@@ -256,7 +259,15 @@ public class SocketsUDPServer : MonoBehaviour
             case MsgType.Transform:
                 // Only players move, and only their own capsule
                 TransformDTO state;
-                if (client != null && Messages.ReadTransform(reader, out state) && state.id == client.id) RelayToOthers(data, client);
+                if (client != null && Messages.ReadTransform(reader, out state) && state.id == client.id)
+                {
+                    lock (m_clients)
+                    {
+                        client.state = state;
+                        client.hasState = true;
+                    }
+                    RelayToOthers(data, client);
+                }
                 break;
             default:
                 Log("[SERVER] Unexpected " + msgType + " message, dropped");
@@ -309,21 +320,50 @@ public class SocketsUDPServer : MonoBehaviour
     // Everybody gets the same seed and climber list, and its own id
     public void StartGame(float duration)
     {
+        m_lastStart = new GameStartDTO();
+        m_lastStart.seed = new System.Random().Next();
+        m_lastStart.duration = duration;
+        m_lastStart.climbers = new List<ClimberDTO>();
+        lock (m_clients)
+        {
+            foreach (ClientInfo c in m_clients)
+            {
+                m_lastStart.climbers.Add(new ClimberDTO { id = c.id, name = c.name });
+                c.hasState = false;
+            }
+        }
+
+        SendGameStart();
+        m_startRepeatsLeft = StartRepeats;
+        m_nextStartRepeat = Time.unscaledTime + StartRepeatInterval;
+        Log("[SERVER] Game started with " + m_lastStart.climbers.Count + " climbers");
+    }
+
+    void SendGameStart()
+    {
         List<ClientInfo> clients;
         lock (m_clients) clients = new List<ClientInfo>(m_clients);
 
-        GameStartDTO game = new GameStartDTO();
-        game.seed = new System.Random().Next();
-        game.duration = duration;
-        game.climbers = new List<ClimberDTO>();
-        foreach (ClientInfo c in clients) game.climbers.Add(new ClimberDTO { id = c.id, name = c.name });
-
+        GameStartDTO game = m_lastStart;
         foreach (ClientInfo c in clients)
         {
+            if (!m_lastStart.climbers.Exists(climber => climber.id == c.id)) continue;
             game.yourId = c.id;
             SendPacket(Messages.GameStart(game), c.endPoint);
         }
-        Log("[SERVER] Game started with " + clients.Count + " climbers");
+    }
+
+    public List<TransformDTO> GetStates()
+    {
+        List<TransformDTO> states = new List<TransformDTO>();
+        lock (m_clients)
+            foreach (ClientInfo c in m_clients) if (c.hasState) states.Add(c.state);
+        return states;
+    }
+
+    public void BroadcastGameOver(GameOverDTO results)
+    {
+        BroadcastPacket(Messages.GameOver(results));
     }
 
     void OnChat(string message, ClientInfo client)
