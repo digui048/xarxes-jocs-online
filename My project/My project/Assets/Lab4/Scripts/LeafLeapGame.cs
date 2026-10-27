@@ -45,12 +45,19 @@ public class LeafLeapGame : MonoBehaviour
     static readonly Color LeafColor = new Color(0.35f, 0.75f, 0.25f);
     static readonly Color GroundColor = new Color(0.45f, 0.3f, 0.2f);
     static readonly Color VisorColor = new Color(0.12f, 0.12f, 0.18f);
+    static readonly Color ChargingColor = new Color(0.3f, 0.8f, 1f);
+    static readonly Color ReadyColor = new Color(1f, 0.85f, 0.1f);
+    static readonly Color ReadyFlash = new Color(1f, 0.45f, 0.1f);
 
     public TMP_Text infoText;
     public TMP_Text timerText;
     public GameObject resultsPanel;
     public TMP_Text resultsText;
     public GameObject playAgainButton;
+    public RectTransform chargePanel;
+    public UnityEngine.UI.Image chargeFill;
+    public TMP_Text chargeText;
+    public UnityEngine.UI.Outline chargeGlow;
     public Camera gameCamera;
     public Material baseMaterial;   // a URP Lit asset, so builds include the shader
 
@@ -153,6 +160,7 @@ public class LeafLeapGame : MonoBehaviour
         MoveOthers();
         SendState();
         FollowWithCamera();
+        ShowCharge();
         timerText.text = m_phase == Phase.Playing ? "0:" + Mathf.CeilToInt(timeLeft).ToString("00") : "";
     }
 
@@ -345,8 +353,34 @@ public class LeafLeapGame : MonoBehaviour
         string text = "Leaf Leap   -   you are the " + ColorNames[m_myColumn % ColorNames.Length] +
             " capsule   -   " + m_level * MetresPerLeaf + " m";
         if (m_phase == Phase.TimeUp) text += "   -   time is up!";
-        else if (m_phase == Phase.Playing) text += m_charged ? "   -   SPACE: super jump!" : "   -   charge " + m_streak + "/" + ChargeStreak;
         infoText.text = text;
+    }
+
+    // The bar fills with every right jump and pulses once the super jump is ready
+    void ShowCharge()
+    {
+        chargePanel.gameObject.SetActive(m_phase == Phase.Playing);
+        if (m_phase != Phase.Playing) return;
+
+        float fill = m_charged ? 1f : (float)m_streak / ChargeStreak;
+        chargeFill.rectTransform.anchorMax = new Vector2(fill, 1f);
+        chargeGlow.enabled = m_charged;
+        if (m_charged)
+        {
+            float pulse = Mathf.PingPong(Time.time * 4f, 1f);
+            chargeText.text = "SPACE: SUPER JUMP!";
+            chargeText.color = Color.Lerp(ReadyColor, Color.white, pulse);
+            chargeFill.color = Color.Lerp(ReadyColor, ReadyFlash, pulse);
+            chargeGlow.effectColor = Color.Lerp(ReadyColor, ReadyFlash, pulse);
+            chargePanel.localScale = Vector3.one * (1f + 0.08f * pulse);
+        }
+        else
+        {
+            chargeText.text = "Super jump   " + m_streak + " / " + ChargeStreak;
+            chargeText.color = Color.white;
+            chargeFill.color = ChargingColor;
+            chargePanel.localScale = Vector3.one;
+        }
     }
 
     string NameOf(int id)
