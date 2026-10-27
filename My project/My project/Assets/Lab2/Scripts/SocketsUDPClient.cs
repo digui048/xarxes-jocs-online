@@ -28,6 +28,7 @@ public class SocketsUDPClient : MonoBehaviour
     public event Action<List<string>> OnPlayersUpdated;
     public event Action<string> OnChatMessageReceived;
     public event Action<GameStartDTO> OnGameStarted;
+    public event Action<TransformDTO> OnTransformReceived;
 
     const int MaxPacketSize = 64 * 1024;
 
@@ -161,6 +162,11 @@ public class SocketsUDPClient : MonoBehaviour
     }
 
     // The server sends the line back to everybody, so it is not added to ChatHistory here
+    public void SendTransform(TransformDTO state)
+    {
+        SendPacket(Messages.Transform(state));
+    }
+
     public void SendChatMessage(string msg)
     {
         if (string.IsNullOrWhiteSpace(msg)) return;
@@ -221,6 +227,11 @@ public class SocketsUDPClient : MonoBehaviour
                 PlayerDTO2 dto;
                 if (Messages.ReadPlayer(reader, out dto)) PlayerData[dto.playerName] = dto;
                 else Log("[CLIENT] Dropped a broken Player message");
+                break;
+            case MsgType.Transform:
+                TransformDTO state;
+                if (!Messages.ReadTransform(reader, out state)) Log("[CLIENT] Dropped a broken Transform message");
+                else if (OnTransformReceived != null) OnTransformReceived(state);
                 break;
             case MsgType.GameStart:
                 GameStartDTO game;

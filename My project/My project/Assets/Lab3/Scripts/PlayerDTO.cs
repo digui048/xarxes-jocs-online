@@ -27,5 +27,6 @@ public enum MsgType : byte
 {
     Text = 1,
     Player = 2,
+    Transform = 3,
     GameStart = 4,
 }

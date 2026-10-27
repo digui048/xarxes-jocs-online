@@ -9,6 +9,16 @@ public struct ClimberDTO
 }
 
 [Serializable]
+public struct TransformDTO
+{
+    public int id;
+    public float x;
+    public float y;
+    public float z;
+    public float rotY;
+}
+
+[Serializable]
 public struct GameStartDTO
 {
     public int seed;

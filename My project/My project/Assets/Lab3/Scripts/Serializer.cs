@@ -22,6 +22,34 @@ public static class Serializer
         return stream.ToArray();
     }
 
+    public static byte[] Serialize(TransformDTO dto)
+    {
+        MemoryStream stream = new MemoryStream();
+        BinaryWriter writer = new BinaryWriter(stream);
+
+        writer.Write(dto.id);
+        writer.Write(dto.x);
+        writer.Write(dto.y);
+        writer.Write(dto.z);
+        writer.Write(dto.rotY);
+
+        return stream.ToArray();
+    }
+
+    public static TransformDTO DeserializeTransform(byte[] data)
+    {
+        BinaryReader reader = new BinaryReader(new MemoryStream(data));
+        TransformDTO dto = new TransformDTO();
+
+        dto.id = reader.ReadInt32();
+        dto.x = reader.ReadSingle();
+        dto.y = reader.ReadSingle();
+        dto.z = reader.ReadSingle();
+        dto.rotY = reader.ReadSingle();
+
+        return dto;
+    }
+
     public static byte[] Serialize(GameStartDTO dto)
     {
         MemoryStream stream = new MemoryStream();

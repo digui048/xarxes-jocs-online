@@ -253,6 +253,11 @@ public class SocketsUDPServer : MonoBehaviour
                 if (Messages.ReadPlayer(reader, out dto)) OnJoin(dto, from, client, time);
                 else Log("[SERVER] Dropped a broken Player message from " + from);
                 break;
+            case MsgType.Transform:
+                // Only players move, and only their own capsule
+                TransformDTO state;
+                if (client != null && Messages.ReadTransform(reader, out state) && state.id == client.id) RelayToOthers(data, client);
+                break;
             default:
                 Log("[SERVER] Unexpected " + msgType + " message, dropped");
                 break;
@@ -404,6 +409,14 @@ public class SocketsUDPServer : MonoBehaviour
     void Broadcast(string text)
     {
         BroadcastPacket(Messages.Text(text));
+    }
+
+    void RelayToOthers(byte[] packet, ClientInfo sender)
+    {
+        List<EndPoint> targets = new List<EndPoint>();
+        lock (m_clients)
+            foreach (ClientInfo c in m_clients) if (c != sender) targets.Add(c.endPoint);
+        foreach (EndPoint target in targets) SendPacket(packet, target);
     }
 
     // Copy inside the lock, send outside it
